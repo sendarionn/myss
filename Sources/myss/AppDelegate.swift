@@ -3,6 +3,7 @@ import SwiftUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private let hotKeyConfiguration = HotKeyConfiguration.default
     private let contextReader = AccessibilityContextReader()
     private let hotKeyManager = HotKeyManager()
     private let model = SearchViewModel()
@@ -13,8 +14,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         configurePanel()
         configureStatusItem()
-        hotKeyManager.register { [weak self] in self?.showPanel() }
+        let registration = hotKeyManager.register(configuration: hotKeyConfiguration) { [weak self] in
+            self?.showPanel()
+        }
+        if case let .failure(error) = registration {
+            print("myss: global hotkey unavailable: \(error)")
+        }
         requestAccessibilityIfNeeded()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        hotKeyManager.unregister()
     }
 
     private func configurePanel() {
@@ -39,7 +49,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(systemSymbolName: "text.magnifyingglass", accessibilityDescription: "myss")
         let menu = NSMenu()
-        menu.addItem(withTitle: "検索を開く（⌥⌘M）", action: #selector(openFromMenu), keyEquivalent: "")
+        menu.addItem(
+            withTitle: "検索を開く（\(hotKeyConfiguration.displayName)）",
+            action: #selector(openFromMenu),
+            keyEquivalent: ""
+        )
         menu.addItem(.separator())
         menu.addItem(withTitle: "終了", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         item.menu = menu
@@ -53,7 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.begin(with: context)
         panel?.center()
         panel?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
     }
 
     private func requestAccessibilityIfNeeded() {
