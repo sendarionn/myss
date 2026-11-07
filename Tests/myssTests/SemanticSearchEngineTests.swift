@@ -2,26 +2,28 @@ import XCTest
 @testable import myss
 
 final class SemanticSearchEngineTests: XCTestCase {
-    private let engine = SemanticSearchEngine()
-
-    func testTemporaryTreatmentQueryRanksExpectedCandidate() {
-        let results = engine.search(
-            query: "問題の原因そのものには手を付けず、今起きている問題だけを一時的に抑える",
-            direction: .meaningToWord
-        )
-        XCTAssertTrue(Set(results.prefix(3).map(\.entry.word)).contains("対症療法"))
+    @MainActor
+    func testSearchDirectionUsesShortTextAsHeadword() {
+        let direction = SemanticSearchEngine().direction(for: "敷衍")
+        XCTAssertEqual(direction, .wordToMeaning)
     }
 
-    func testInitiativeQueryReturnsRelevantWords() {
-        let results = engine.search(query: "人に指示されなくても自分から考えて動く性質", direction: .meaningToWord)
-        let topFive = Set(results.prefix(5).map(\.entry.word))
-        XCTAssertTrue(topFive.contains("主体性"))
-        XCTAssertTrue(topFive.contains("自主性"))
+    @MainActor
+    func testSearchDirectionUsesSentenceAsMeaning() {
+        let direction = SemanticSearchEngine().direction(for: "人に指示されなくても自分から考えて動く性質")
+        XCTAssertEqual(direction, .meaningToWord)
     }
 
-    func testExactHeadwordSelectsWordToMeaning() {
-        XCTAssertEqual(engine.direction(for: "敷衍"), .wordToMeaning)
-        XCTAssertEqual(engine.search(query: "敷衍", direction: .wordToMeaning).first?.entry.word, "敷衍")
+    func testLexicalSenseDecodesSeparateSenses() throws {
+        let data = Data("""
+        {"senses":[
+          {"id":"bridge-1","headword":"橋","partOfSpeech":"n","summary":"川を渡る構造物","definitions":["川を渡る構造物"],"aliases":[],"examples":[],"sources":[],"relatedWords":[],"score":0.9},
+          {"id":"bridge-2","headword":"橋","partOfSpeech":"n","summary":"二者をつなぐもの","definitions":["二者をつなぐもの"],"aliases":[],"examples":[],"sources":[],"relatedWords":[],"score":0.8}
+        ],"phase":"embedding"}
+        """.utf8)
+        let response = try JSONDecoder().decode(SearchResponse.self, from: data)
+        XCTAssertEqual(response.senses.count, 2)
+        XCTAssertNotEqual(response.senses[0].id, response.senses[1].id)
     }
 
     func testContextExtractionUsesCurrentSentenceOnly() {

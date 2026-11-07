@@ -1,77 +1,98 @@
 import Foundation
 
-struct SemanticSearchEngine: Sendable {
+@MainActor
+final class SemanticSearchEngine {
+    static let shared = SemanticSearchEngine()
+    private let baseURL = URL(string: "http://127.0.0.1:52791")!
+    private var backendProcess: Process?
+    private var didAttemptStart = false
+
     func direction(for text: String) -> SearchDirection {
         let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let isKnownWord = Lexicon.entries.contains { entry in
-            entry.word == normalized || entry.aliases.contains(normalized)
-        }
-        if isKnownWord || (normalized.count <= 8 && !normalized.contains(where: "。！？、\n".contains)) {
+        guard !normalized.isEmpty else { return .meaningToWord }
+        if normalized.count <= 8, !normalized.contains(where: "。！？、\n".contains) {
             return .wordToMeaning
         }
         return .meaningToWord
     }
 
-    func search(query: String, direction: SearchDirection, limit: Int = 10) -> [SearchResult] {
-        let query = normalize(query)
-        guard !query.isEmpty else { return [] }
-
-        return Lexicon.entries.compactMap { entry in
-            let score: Double
-            switch direction {
-            case .wordToMeaning:
-                score = wordScore(query: query, entry: entry)
-            case .meaningToWord:
-                score = semanticScore(query: query, entry: entry)
+    func status() async -> BackendStatus {
+        do {
+            try await ensureStarted()
+            let (data, response) = try await URLSession.shared.data(from: baseURL.appending(path: "health"))
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                return BackendStatus(ready: false, model: nil, senseCount: nil, message: "検索データを準備できません")
             }
-            return score > 0 ? SearchResult(entry: entry, score: score) : nil
+            return try JSONDecoder().decode(BackendStatus.self, from: data)
+        } catch {
+            return BackendStatus(ready: false, model: nil, senseCount: nil, message: error.localizedDescription)
         }
-        .sorted { lhs, rhs in
-            lhs.score == rhs.score ? lhs.entry.word < rhs.entry.word : lhs.score > rhs.score
+    }
+
+    func search(query: String, direction: SearchDirection, limit: Int = 10) async throws -> SearchResponse {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return SearchResponse(senses: [], phase: "local") }
+        try await ensureStarted()
+        var request = URLRequest(url: baseURL.appending(path: "search"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 20
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "query": query,
+            "direction": direction == .meaningToWord ? "meaningToWord" : "wordToMeaning",
+            "limit": limit
+        ])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else { throw SemanticBackendError.invalidResponse }
+        guard httpResponse.statusCode == 200 else {
+            let body = try? JSONSerialization.jsonObject(with: data) as? [String: String]
+            throw SemanticBackendError.server(body?["error"] ?? "検索に失敗しました")
         }
-        .prefix(limit)
-        .map { $0 }
+        return try JSONDecoder().decode(SearchResponse.self, from: data)
     }
 
-    private func wordScore(query: String, entry: LexicalEntry) -> Double {
-        if normalize(entry.word) == query { return 100 }
-        if entry.aliases.map(normalize).contains(query) { return 90 }
-        if normalize(entry.word).contains(query) || query.contains(normalize(entry.word)) { return 50 }
-        return dice(query, normalize(entry.word)) * 20
+    func stop() {
+        guard let backendProcess else { return }
+        if backendProcess.isRunning { backendProcess.terminate() }
+        self.backendProcess = nil
+        didAttemptStart = false
     }
 
-    private func semanticScore(query: String, entry: LexicalEntry) -> Double {
-        let fields = [entry.summary] + entry.cues + entry.aliases + [entry.word]
-        var best = 0.0
-        var cueHits = 0.0
-
-        for field in fields {
-            let normalizedField = normalize(field)
-            if query.contains(normalizedField) || normalizedField.contains(query) {
-                best = max(best, 20 + Double(min(query.count, normalizedField.count)))
-            }
-            best = max(best, dice(query, normalizedField) * 15)
-            let fieldBigrams = bigrams(normalizedField)
-            cueHits += Double(bigrams(query).intersection(fieldBigrams).count) * 0.8
+    private func ensureStarted() async throws {
+        if await isHealthy() { return }
+        guard !didAttemptStart else {
+            throw SemanticBackendError.unavailable("検索データが未準備です　Scripts/setup-semantic-search.shを実行してください")
         }
-        return best + min(cueHits, 12)
+        didAttemptStart = true
+        let environment = ProcessInfo.processInfo.environment
+        let projectRoot = environment["MYSS_PROJECT_ROOT"] ?? FileManager.default.currentDirectoryPath
+        let pythonPath = environment["MYSS_BACKEND_PYTHON"] ?? "\(projectRoot)/.myss-runtime/bin/python3"
+        let dataPath = environment["MYSS_DATA_PATH"] ?? "\(projectRoot)/.myss-data"
+        let bundledBackend = Bundle.module.url(forResource: "Backend", withExtension: nil)?
+            .appending(path: "semantic_backend.py").path
+        let backendPath = bundledBackend ?? "\(projectRoot)/Sources/myss/Backend/semantic_backend.py"
+        guard FileManager.default.isExecutableFile(atPath: pythonPath),
+              FileManager.default.fileExists(atPath: "\(dataPath)/embeddings.npy") else {
+            throw SemanticBackendError.unavailable("検索データが未準備です　Scripts/setup-semantic-search.shを実行してください")
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: pythonPath)
+        process.arguments = [backendPath, "serve", "--data", dataPath, "--port", "52791"]
+        process.standardOutput = FileHandle.standardOutput
+        process.standardError = FileHandle.standardError
+        try process.run()
+        backendProcess = process
+        for _ in 0..<600 {
+            try await Task.sleep(for: .milliseconds(100))
+            if await isHealthy() { return }
+        }
+        throw SemanticBackendError.unavailable("検索バックエンドを起動できませんでした")
     }
 
-    private func normalize(_ value: String) -> String {
-        value.folding(options: [.widthInsensitive, .caseInsensitive], locale: .init(identifier: "ja_JP"))
-            .filter { !$0.isWhitespace && !"。、，．！？・「」『』（）()".contains($0) }
-    }
-
-    private func bigrams(_ value: String) -> Set<String> {
-        let chars = Array(value)
-        guard chars.count > 1 else { return Set(chars.map(String.init)) }
-        return Set((0..<(chars.count - 1)).map { String(chars[$0...($0 + 1)]) })
-    }
-
-    private func dice(_ lhs: String, _ rhs: String) -> Double {
-        let left = bigrams(lhs)
-        let right = bigrams(rhs)
-        guard !left.isEmpty, !right.isEmpty else { return lhs == rhs ? 1 : 0 }
-        return 2 * Double(left.intersection(right).count) / Double(left.count + right.count)
+    private func isHealthy() async -> Bool {
+        var request = URLRequest(url: baseURL.appending(path: "health"))
+        request.timeoutInterval = 0.2
+        guard let (_, response) = try? await URLSession.shared.data(for: request) else { return false }
+        return (response as? HTTPURLResponse)?.statusCode == 200
     }
 }

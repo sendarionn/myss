@@ -1,0 +1,228 @@
+#!/usr/bin/env python3
+import argparse
+import json
+from pathlib import Path
+import xml.etree.ElementTree as ET
+
+WORDNET_URL = "https://bond-lab.github.io/wnja/"
+WORDNET_ATTRIBUTION = "日本語ワードネット 2.1"
+MODEL_ID = "cl-nagoya/ruri-v3-70m"
+
+
+def parse_wordnet(xml_path: Path):
+    synset_words = {}
+    records = []
+    for _, element in ET.iterparse(xml_path, events=("end",)):
+        tag = element.tag.rsplit("}", 1)[-1]
+        if tag == "LexicalEntry":
+            lemma = element.find("Lemma")
+            if lemma is not None:
+                headword = lemma.get("writtenForm", "")
+                part_of_speech = lemma.get("partOfSpeech")
+                forms = [
+                    form.get("writtenForm", "")
+                    for form in element.findall("Form")
+                    if not form.get("script")
+                ]
+                for sense in element.findall("Sense"):
+                    synset_id = sense.get("synset")
+                    if not synset_id:
+                        continue
+                    count = sum(int(node.text or "0") for node in sense.findall("Count"))
+                    synset_words.setdefault(synset_id, []).append({
+                        "headword": headword,
+                        "partOfSpeech": part_of_speech,
+                        "forms": forms,
+                        "count": count,
+                    })
+            element.clear()
+        elif tag == "Synset":
+            synset_id = element.get("id", "")
+            words = synset_words.get(synset_id, [])
+            definitions = [node.text.strip() for node in element.findall("Definition") if node.text and node.text.strip()]
+            examples = [node.text.strip() for node in element.findall("Example") if node.text and node.text.strip()]
+            if words and definitions:
+                words.sort(key=lambda item: (-item["count"], len(item["headword"]), item["headword"]))
+                primary = words[0]
+                aliases = []
+                for word in words:
+                    candidates = ([word["headword"]] if word is not primary else []) + word["forms"]
+                    for candidate in candidates:
+                        if candidate and candidate != primary["headword"] and candidate not in aliases:
+                            aliases.append(candidate)
+                records.append({
+                    "id": synset_id,
+                    "headword": primary["headword"],
+                    "partOfSpeech": primary["partOfSpeech"],
+                    "summary": definitions[0],
+                    "definitions": definitions,
+                    "aliases": aliases,
+                    "examples": examples,
+                    "relatedWords": [],
+                })
+            element.clear()
+    return records
+
+
+def mps_available():
+    try:
+        import torch
+        return torch.backends.mps.is_available()
+    except Exception:
+        return False
+
+
+def build_index(xml_path: Path, output_path: Path, batch_size: int):
+    import numpy as np
+    from sentence_transformers import SentenceTransformer
+
+    records = parse_wordnet(xml_path)
+    documents = []
+    for record in records:
+        aliases = "、".join(record["aliases"][:12])
+        examples = "。".join(record["examples"][:3])
+        documents.append(f"検索文書: {record['headword']}。{record['summary']}。類義語: {aliases}。用例: {examples}")
+    print(f"myss backend: loading {MODEL_ID}", flush=True)
+    model = SentenceTransformer(MODEL_ID, device="mps" if mps_available() else "cpu")
+    embeddings = model.encode(
+        documents,
+        batch_size=batch_size,
+        normalize_embeddings=True,
+        show_progress_bar=True,
+    ).astype(np.float16)
+    output_path.mkdir(parents=True, exist_ok=True)
+    np.save(output_path / "embeddings.npy", embeddings)
+    (output_path / "senses.json").write_text(
+        json.dumps(records, ensure_ascii=False, separators=(",", ":")), encoding="utf-8"
+    )
+    (output_path / "metadata.json").write_text(
+        json.dumps({"model": MODEL_ID, "senseCount": len(records), "wordnetVersion": "2.1"}), encoding="utf-8"
+    )
+    print(f"myss backend: indexed {len(records)} lexical senses", flush=True)
+
+
+class SearchRuntime:
+    def __init__(self, data_path: Path):
+        import numpy as np
+        from sentence_transformers import SentenceTransformer
+
+        self.records = json.loads((data_path / "senses.json").read_text(encoding="utf-8"))
+        self.embeddings = np.load(data_path / "embeddings.npy", mmap_mode="r")
+        self.model = SentenceTransformer(
+            MODEL_ID,
+            device="mps" if mps_available() else "cpu",
+            local_files_only=True,
+        )
+        self.word_lookup = {}
+        for index, record in enumerate(self.records):
+            for word in [record["headword"], *record["aliases"]]:
+                self.word_lookup.setdefault(word, []).append(index)
+
+    def search(self, query: str, direction: str, limit: int):
+        import numpy as np
+
+        if direction == "wordToMeaning":
+            indexes = self.word_lookup.get(query.strip(), [])[:limit]
+            if not indexes:
+                indexes = [index for word, values in self.word_lookup.items() if query.strip() in word for index in values][:limit]
+            scores = [1.0] * len(indexes)
+        else:
+            query_embedding = self.model.encode([f"検索クエリ: {query}"], normalize_embeddings=True)[0].astype(np.float32)
+            scores_all = self.embeddings @ query_embedding
+            candidate_count = min(max(limit * 4, limit), len(scores_all))
+            indexes = np.argpartition(scores_all, -candidate_count)[-candidate_count:]
+            indexes = indexes[np.argsort(scores_all[indexes])[::-1]][:limit].tolist()
+            scores = [float(scores_all[index]) for index in indexes]
+        senses = []
+        for index, score in zip(indexes, scores):
+            record = dict(self.records[index])
+            if direction == "wordToMeaning" and query.strip() in [record["headword"], *record["aliases"]]:
+                original_headword = record["headword"]
+                record["headword"] = query.strip()
+                record["aliases"] = [original_headword, *[value for value in record["aliases"] if value != query.strip()]]
+            record["score"] = score
+            record["sources"] = [{
+                "name": WORDNET_ATTRIBUTION,
+                "text": record["summary"],
+                "url": WORDNET_URL,
+                "license": "WordNet-style permissive license",
+            }]
+            senses.append(record)
+        return {"senses": senses, "phase": "embedding"}
+
+
+def serve(data_path: Path, port: int):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    runtime = SearchRuntime(data_path)
+    metadata_path = data_path / "metadata.json"
+    metadata = json.loads(metadata_path.read_text()) if metadata_path.exists() else {}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path != "/health":
+                self.send_error(404)
+                return
+            self.send_json(200, {
+                "ready": True,
+                "model": metadata.get("model", MODEL_ID),
+                "senseCount": metadata.get("senseCount", len(runtime.records)),
+                "message": None,
+            })
+
+        def do_POST(self):
+            if self.path != "/search":
+                self.send_error(404)
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                body = json.loads(self.rfile.read(length))
+                result = runtime.search(
+                    str(body.get("query", "")),
+                    str(body.get("direction", "meaningToWord")),
+                    max(1, min(int(body.get("limit", 10)), 20)),
+                )
+                self.send_json(200, result)
+            except Exception as error:
+                self.send_json(500, {"error": str(error)})
+
+        def send_json(self, status, value):
+            data = json.dumps(value, ensure_ascii=False).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, format, *args):
+            print("myss backend:", format % args, flush=True)
+
+    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    print(f"myss backend: ready on 127.0.0.1:{port}", flush=True)
+    server.serve_forever()
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    build = subparsers.add_parser("build")
+    build.add_argument("--xml", required=True, type=Path)
+    build.add_argument("--output", required=True, type=Path)
+    build.add_argument("--batch-size", type=int, default=64)
+    parse = subparsers.add_parser("parse")
+    parse.add_argument("--xml", required=True, type=Path)
+    serve_parser = subparsers.add_parser("serve")
+    serve_parser.add_argument("--data", required=True, type=Path)
+    serve_parser.add_argument("--port", type=int, default=52791)
+    args = parser.parse_args()
+    if args.command == "build":
+        build_index(args.xml, args.output, args.batch_size)
+    elif args.command == "parse":
+        records = parse_wordnet(args.xml)
+        print(json.dumps({"senseCount": len(records), "sample": records[:2]}, ensure_ascii=False))
+    else:
+        serve(args.data, args.port)
+
+
+if __name__ == "__main__":
+    main()

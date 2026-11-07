@@ -25,11 +25,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         hotKeyManager.unregister()
+        SemanticSearchEngine.shared.stop()
     }
 
     private func configurePanel() {
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 620, height: 480),
+            contentRect: NSRect(x: 0, y: 0, width: 680, height: 560),
             styleMask: [.titled, .fullSizeContentView],
             backing: .buffered,
             defer: false
