@@ -30,3 +30,10 @@
 - 意図は入力全体からAIが推定し、判断例はfew-shotとして渡す
 - Structured Outputに`target_expression`（string | null、必須）を追加
 - 対象外の説明に「プログラミング」が含まれ、分野の用語説明まで断られる恐れがあったため、語句・表現の質問は分野を問わず答えるよう修正
+
+## 2026-11-08 選択文字列取得の堅牢化
+
+- `AXSelectedText` → `AXSelectedTextRange` + `AXValue` → `AXStringForRangeParameterizedAttribute` → `⌘C`の順に取得
+- `⌘C`は選択範囲を公開していない要素、またはフォーカス要素を取得できないアプリだけで実行
+- クリップボードは`NSPasteboardItem`単位で全形式を退避し、`changeCount`の更新で取得成功を判定
+- 選択取得はパネル表示前に行うため、`capture()`をasyncにしてショートカット処理から待つ

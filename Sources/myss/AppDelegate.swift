@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var firstRunWindow: NSWindow?
     private var statusMenuItem: NSMenuItem?
     private var openMenuItem: NSMenuItem?
+    private var isCapturingContext = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -138,10 +139,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func showPanel() {
-        let context = AXIsProcessTrusted() ? contextReader.capture() : .empty
-        model.begin(with: context)
-        panel?.center()
-        panel?.makeKeyAndOrderFront(nil)
-        NSApp.activate()
+        // 元アプリが前面にあるうちに選択文字列を取得してからパネルを出す　取得中の連続起動は無視する
+        guard !isCapturingContext else { return }
+        isCapturingContext = true
+        Task { @MainActor in
+            let context = AXIsProcessTrusted() ? await contextReader.capture() : .empty
+            isCapturingContext = false
+            model.begin(with: context)
+            panel?.center()
+            panel?.makeKeyAndOrderFront(nil)
+            NSApp.activate()
+        }
     }
 }

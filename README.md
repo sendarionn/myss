@@ -27,7 +27,13 @@ Codexを使用して開発しています
 - 選択文字列（最大600文字）
 - 選択箇所またはカーソルを含む文と前後1文（最大400文字）
 - パネルで入力した追加の指示と、同じパネル内での直前の回答
-- パスワード欄（Secure Text Field）は読み取りません
+- 選択文字列は次の順に取得します
+  1. `AXSelectedText`
+  2. `AXSelectedTextRange` + `AXValue`から切り出し
+  3. `AXStringForRangeParameterizedAttribute`
+  4. アプリが選択範囲を公開していない場合だけ`⌘C`で取得し、元のクリップボードを全形式で復元
+- 選択範囲が長さ0（カーソルのみ）の場合は`⌘C`を送りません
+- パスワード欄（Secure Text Field）とパスワード入力中（Secure Event Input）は読み取らず、`⌘C`も送りません
 - 文書全体は送信しません
 - 設定の「詳細」→「最後にAIへ送信した内容を表示」で確認できます
 
@@ -72,6 +78,9 @@ TerminalやPythonは不要です
 ```sh
 swift run myss
 ```
+
+Debug buildでは選択文字列の取得経路を`[myss][context]`で出力します（文字列そのものは出力しません）
+`MYSS_AX_ATTRIBUTES=1 swift run myss`で、対象要素が公開している属性名も出力します
 
 許可後に反映されない場合は、システム設定の「プライバシーとセキュリティ」→「アクセシビリティ」で実行元のターミナルを許可してから再起動します
 

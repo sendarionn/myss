@@ -276,3 +276,60 @@ final class TargetExpressionTests: XCTestCase {
         XCTAssertFalse(LanguagePrompt.system.contains("追加指示がなければexplain_expression"))
     }
 }
+
+final class SelectionExtractionTests: XCTestCase {
+    func testRangeIsCutFromValue() {
+        XCTAssertEqual(AccessibilityContextReader.substring(of: "abcdef", range: CFRange(location: 2, length: 3)), "cde")
+    }
+
+    func testRangeUsesUTF16WithJapaneseAndEmoji() {
+        let value = "新製品😀のリリース時期"
+        let location = ("新製品😀の" as NSString).length
+        XCTAssertEqual(AccessibilityContextReader.substring(of: value, range: CFRange(location: location, length: 4)), "リリース")
+        XCTAssertEqual(AccessibilityContextReader.substring(of: value, range: CFRange(location: 3, length: 2)), "😀")
+    }
+
+    func testInvalidRangeDoesNotCrash() {
+        let value = "abcdef"
+        XCTAssertNil(AccessibilityContextReader.substring(of: value, range: CFRange(location: 7, length: 1)))
+        XCTAssertNil(AccessibilityContextReader.substring(of: value, range: CFRange(location: 4, length: 5)))
+        XCTAssertNil(AccessibilityContextReader.substring(of: value, range: CFRange(location: -1, length: 2)))
+        XCTAssertNil(AccessibilityContextReader.substring(of: value, range: CFRange(location: 2, length: Int.max)))
+    }
+
+    func testEmptyRangeIsNotSelection() {
+        XCTAssertNil(AccessibilityContextReader.substring(of: "abcdef", range: CFRange(location: 3, length: 0)))
+        XCTAssertNil(AccessibilityContextReader.limitedSelection(" \n"))
+    }
+
+    func testSelectionKeepsMaximumLength() {
+        let long = String(repeating: "あ", count: 700)
+        XCTAssertEqual(AccessibilityContextReader.limitedSelection(long)?.count, AccessibilityContextReader.maximumSelectionLength)
+    }
+}
+
+final class PasteboardSnapshotTests: XCTestCase {
+    @MainActor
+    func testSnapshotRestoresAllItemsAndTypes() {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("myss-test-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        let first = NSPasteboardItem()
+        first.setString("plain", forType: .string)
+        first.setData(Data("<b>rich</b>".utf8), forType: .html)
+        let second = NSPasteboardItem()
+        second.setData(Data([1, 2, 3]), forType: NSPasteboard.PasteboardType("com.example.custom"))
+        pasteboard.clearContents()
+        pasteboard.writeObjects([first, second])
+
+        let snapshot = PasteboardSnapshot(pasteboard)
+        pasteboard.clearContents()
+        pasteboard.setString("copied selection", forType: .string)
+        snapshot.restore(to: pasteboard)
+
+        let items = pasteboard.pasteboardItems ?? []
+        XCTAssertEqual(items.count, 2)
+        XCTAssertEqual(items.first?.string(forType: .string), "plain")
+        XCTAssertEqual(items.first?.data(forType: .html), Data("<b>rich</b>".utf8))
+        XCTAssertEqual(items.last?.data(forType: NSPasteboard.PasteboardType("com.example.custom")), Data([1, 2, 3]))
+    }
+}
