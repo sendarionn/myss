@@ -93,8 +93,10 @@ struct OpenAILanguageProvider: LanguageAssistantProvider {
         guard !text.isEmpty,
               let decoded = try? JSONDecoder().decode(LanguageResponse.self, from: Data(text.utf8))
         else { throw LanguageAssistantError.invalidResponse }
+        let target = decoded.targetExpression?.trimmingCharacters(in: .whitespacesAndNewlines)
         return LanguageResponse(
             intent: decoded.intent,
+            targetExpression: target?.isEmpty == false ? target : nil,
             summary: decoded.summary.trimmingCharacters(in: .whitespacesAndNewlines),
             candidates: Array(deduplicated(decoded.candidates).prefix(10))
         )

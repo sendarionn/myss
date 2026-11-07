@@ -74,7 +74,7 @@ final class OpenAIRequestTests: XCTestCase {
         XCTAssertEqual(format["strict"] as? Bool, true)
         XCTAssertEqual(format["name"] as? String, "language_response")
         let schema = try XCTUnwrap(format["schema"] as? [String: Any])
-        XCTAssertEqual(schema["required"] as? [String], ["intent", "summary", "candidates"])
+        XCTAssertEqual(schema["required"] as? [String], ["intent", "target_expression", "summary", "candidates"])
         for key in ["output_config", "fallbacks", "system", "max_tokens"] { XCTAssertNil(body[key]) }
     }
 
@@ -228,3 +228,51 @@ final class LanguageAssistantTests: XCTestCase {
     }
 }
 
+
+final class TargetExpressionTests: XCTestCase {
+    private func parse(_ json: String) throws -> LanguageResponse {
+        let body: [String: Any] = [
+            "status": "completed",
+            "output": [["type": "message", "role": "assistant", "content": [["type": "output_text", "text": json]]]]
+        ]
+        return try OpenAILanguageProvider.parse(JSONSerialization.data(withJSONObject: body))
+    }
+
+    func testSchemaRequiresNullableTargetExpression() throws {
+        let schema = LanguagePrompt.responseSchema
+        let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
+        let target = try XCTUnwrap(properties["target_expression"] as? [String: Any])
+        XCTAssertEqual(target["type"] as? [String], ["string", "null"])
+        XCTAssertTrue((schema["required"] as? [String] ?? []).contains("target_expression"))
+    }
+
+    func testExplanationDecodesTargetExpression() throws {
+        let response = try parse(#"{"intent":"explain_expression","target_expression":"プレーンテキスト","summary":"書式情報を持たない文字データ","candidates":[]}"#)
+        XCTAssertEqual(response.intent, .explainExpression)
+        XCTAssertEqual(response.targetExpression, "プレーンテキスト")
+        XCTAssertTrue(response.candidates.isEmpty)
+    }
+
+    func testSearchDecodesNullTargetExpression() throws {
+        let response = try parse(#"{"intent":"find_expression","target_expression":null,"summary":"","candidates":[{"text":"プレーンテキスト","explanation":"文字情報だけのテキスト"}]}"#)
+        XCTAssertEqual(response.intent, .findExpression)
+        XCTAssertNil(response.targetExpression)
+        XCTAssertEqual(response.candidates.map(\.text), ["プレーンテキスト"])
+    }
+
+    func testPreviousAnswerSentToAIKeepsNullTargetExpression() throws {
+        let previous = LanguageResponse(intent: .findExpression, summary: "", candidates: [])
+        let request = LanguageRequest(
+            selectedText: "", surroundingContext: "", cursorOffset: nil,
+            history: [LanguageTurn(instruction: "シンプルなテキストファイル", response: previous)],
+            manualInstruction: "意味を教えて"
+        )
+        let assistantMessage = try XCTUnwrap(LanguagePrompt.messages(for: request)[1]["content"])
+        XCTAssertTrue(assistantMessage.contains(#""target_expression":null"#))
+    }
+
+    func testPromptDoesNotDecideIntentFromSelectionAlone() {
+        XCTAssertTrue(LanguagePrompt.system.contains("選択文字列の有無だけでintentを決めない"))
+        XCTAssertFalse(LanguagePrompt.system.contains("追加指示がなければexplain_expression"))
+    }
+}

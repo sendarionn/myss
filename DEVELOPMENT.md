@@ -23,3 +23,10 @@
 - Keychainのアカウントは`openai-api-key`　旧`anthropic-api-key`は参照せず移行もしない
 - 接続確認は`/v1/models`ではなく`/v1/responses`で行い、`Model capabilities: Request`だけで完結させる
 - APIキー保存後はKeychainから読み戻して一致を確認する
+
+## 2026-11-08 意図判定をAIへ集約
+
+- system promptから「選択あり＋指示なし → explain_expression」「選択なし → find_expression」の判断目安を削除
+- 意図は入力全体からAIが推定し、判断例はfew-shotとして渡す
+- Structured Outputに`target_expression`（string | null、必須）を追加
+- 対象外の説明に「プログラミング」が含まれ、分野の用語説明まで断られる恐れがあったため、語句・表現の質問は分野を問わず答えるよう修正

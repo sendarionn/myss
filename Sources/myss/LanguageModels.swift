@@ -47,8 +47,32 @@ struct LanguageCandidate: Codable, Hashable, Sendable, Identifiable {
 
 struct LanguageResponse: Codable, Hashable, Sendable {
     let intent: LanguageIntent
+    /// AIが説明対象として認識した語句　なければnil
+    let targetExpression: String?
     let summary: String
     let candidates: [LanguageCandidate]
+
+    init(intent: LanguageIntent, targetExpression: String? = nil, summary: String, candidates: [LanguageCandidate]) {
+        self.intent = intent
+        self.targetExpression = targetExpression
+        self.summary = summary
+        self.candidates = candidates
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case intent
+        case targetExpression = "target_expression"
+        case summary
+        case candidates
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(intent, forKey: .intent)
+        try container.encode(targetExpression, forKey: .targetExpression)
+        try container.encode(summary, forKey: .summary)
+        try container.encode(candidates, forKey: .candidates)
+    }
 }
 
 struct LanguageTurn: Hashable, Sendable {
