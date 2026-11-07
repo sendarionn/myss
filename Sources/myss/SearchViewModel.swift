@@ -4,7 +4,7 @@ import Foundation
 @MainActor
 final class SearchViewModel: ObservableObject {
     @Published var query = ""
-    @Published var direction: SearchDirection = .meaningToWord
+    @Published private(set) var intent: SearchIntent?
     @Published var results: [LexicalSense] = []
     @Published var selectedIndex = 0
     @Published var contextSource: ContextSource = .none
@@ -17,7 +17,6 @@ final class SearchViewModel: ObservableObject {
     private var context = CapturedContext.empty
     private var searchTask: Task<Void, Never>?
     private var generation = 0
-    private var directionWasManuallyChanged = false
 
     var selectedSense: LexicalSense? {
         results.indices.contains(selectedIndex) ? results[selectedIndex] : nil
@@ -27,25 +26,28 @@ final class SearchViewModel: ObservableObject {
         searchTask?.cancel()
         self.context = context
         contextSource = context.source
-        directionWasManuallyChanged = false
         query = context.text
         selectedIndex = 0
         statusMessage = nil
-        direction = engine.direction(for: context.text)
+        intent = nil
+        results = []
         scheduleSearch()
     }
 
     func queryChanged() {
-        if !directionWasManuallyChanged {
-            direction = engine.direction(for: query)
-        }
         scheduleSearch()
     }
 
-    func setDirection(_ value: SearchDirection) {
-        directionWasManuallyChanged = true
-        direction = value
-        scheduleSearch()
+    /// 選択語から始まる入力の間だけ、選択時に取得した周辺文脈を検索へ渡す
+    nonisolated static func capturedContext(for query: String, selectedHeadword: String, surroundingText: String) -> String? {
+        let normalize = { (text: String) in text.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
+        let query = normalize(query)
+        let headword = normalize(selectedHeadword)
+        let surrounding = surroundingText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !headword.isEmpty, !surrounding.isEmpty,
+              query == headword || query.hasPrefix(headword + " ")
+        else { return nil }
+        return surrounding
     }
 
     func moveSelection(_ offset: Int) {
@@ -54,7 +56,7 @@ final class SearchViewModel: ObservableObject {
     }
 
     func primaryAction() {
-        guard direction == .meaningToWord, let sense = selectedSense else { return }
+        guard intent?.isWordLookup == false, let sense = selectedSense else { return }
         inserter.insert(sense.headword, into: context)
         onDismiss?()
     }
@@ -69,10 +71,13 @@ final class SearchViewModel: ObservableObject {
         generation += 1
         let currentGeneration = generation
         let currentQuery = query
-        let currentDirection = direction
+        let currentContext = context.source == .selection
+            ? Self.capturedContext(for: currentQuery, selectedHeadword: context.text, surroundingText: context.surroundingText)
+            : nil
         searchTask?.cancel()
         guard !currentQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             results = []
+            intent = nil
             statusMessage = nil
             isSearching = false
             return
@@ -82,10 +87,15 @@ final class SearchViewModel: ObservableObject {
             try? await Task.sleep(for: .milliseconds(100))
             guard !Task.isCancelled else { return }
             do {
-                let response = try await engine.search(query: currentQuery, direction: currentDirection)
+                let response = try await engine.search(query: currentQuery, capturedContext: currentContext)
                 guard !Task.isCancelled, let self, currentGeneration == self.generation else { return }
+                let newIntent = response.searchIntent
+                #if DEBUG
+                print("myss intent:", newIntent)
+                #endif
+                intent = newIntent
                 results = response.senses
-                selectedIndex = min(selectedIndex, max(results.count - 1, 0))
+                selectedIndex = 0
                 statusMessage = results.isEmpty ? "該当する語義がありません" : nil
                 isSearching = false
             } catch {

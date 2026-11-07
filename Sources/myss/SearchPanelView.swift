@@ -37,12 +37,6 @@ struct SearchPanelView: View {
                 .onSubmit { model.primaryAction() }
                 .onChange(of: model.query) { _, _ in model.queryChanged() }
             if model.isSearching { ProgressView().controlSize(.small) }
-            Picker("検索方向", selection: Binding(get: { model.direction }, set: { model.setDirection($0) })) {
-                ForEach(SearchDirection.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .frame(width: 112)
         }
         .padding(14)
     }
@@ -57,7 +51,7 @@ struct SearchPanelView: View {
         } else if model.results.isEmpty {
             ContentUnavailableView("語または意味を入力", systemImage: "text.magnifyingglass")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if model.direction == .wordToMeaning {
+        } else if model.intent?.isWordLookup == true {
             meaningDetail
         } else {
             resultList
@@ -91,6 +85,7 @@ struct SearchPanelView: View {
                     if let part = partOfSpeechLabel(sense.partOfSpeech) {
                         Text(part).font(.caption).foregroundStyle(.secondary)
                     }
+                    Text(sense.summary).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                 }
                 .contentShape(Rectangle())
                 .onTapGesture { model.selectedIndex = index }
@@ -129,9 +124,9 @@ struct SearchPanelView: View {
         HStack {
             Text(model.contextSource.rawValue)
             Spacer()
-            Text(model.direction == .meaningToWord
-                 ? "↕ 選択   ↩ 挿入   ⌘↩ コピー   esc 閉じる"
-                 : "↕ 語義選択   ⌘↩ コピー   esc 閉じる")
+            Text(model.intent?.isWordLookup == true
+                 ? "↕ 語義選択   ⌘↩ コピー   esc 閉じる"
+                 : "↕ 選択   ↩ 挿入   ⌘↩ コピー   esc 閉じる")
         }
         .font(.caption)
         .foregroundStyle(.secondary)

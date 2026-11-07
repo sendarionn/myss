@@ -2,10 +2,15 @@
 @preconcurrency import ApplicationServices
 import Foundation
 
-enum SearchDirection: String, CaseIterable, Identifiable, Sendable, Codable {
-    case meaningToWord = "意味 → 語"
-    case wordToMeaning = "語 → 意味"
-    var id: Self { self }
+enum SearchIntent: Equatable, Sendable {
+    case wordMeaning(headword: String)
+    case wordMeaningWithContext(headword: String, context: String)
+    case meaningToWord(query: String)
+
+    var isWordLookup: Bool {
+        if case .meaningToWord = self { return false }
+        return true
+    }
 }
 
 struct LexicalSource: Identifiable, Hashable, Sendable, Codable {
@@ -30,8 +35,23 @@ struct LexicalSense: Identifiable, Hashable, Sendable, Codable {
 }
 
 struct SearchResponse: Sendable, Codable {
+    let intent: String
+    let query: String
+    let headword: String?
+    let context: String?
     let senses: [LexicalSense]
     let phase: String
+
+    var searchIntent: SearchIntent {
+        switch (intent, headword, context) {
+        case let ("wordMeaningWithContext", headword?, context?):
+            .wordMeaningWithContext(headword: headword, context: context)
+        case let ("wordMeaning", headword?, _):
+            .wordMeaning(headword: headword)
+        default:
+            .meaningToWord(query: query)
+        }
+    }
 }
 
 struct BackendStatus: Sendable, Codable {
@@ -43,10 +63,11 @@ struct BackendStatus: Sendable, Codable {
 
 struct CapturedContext {
     let text: String
+    let surroundingText: String
     let source: ContextSource
     let targetElement: AXUIElement?
     let sourceApplication: NSRunningApplication?
-    static let empty = CapturedContext(text: "", source: .none, targetElement: nil, sourceApplication: nil)
+    static let empty = CapturedContext(text: "", surroundingText: "", source: .none, targetElement: nil, sourceApplication: nil)
 }
 
 enum ContextSource: String {

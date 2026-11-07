@@ -9,15 +9,6 @@ final class SemanticSearchEngine: ObservableObject {
     private var backendProcess: Process?
     private var startupTask: Task<Void, Error>?
 
-    func direction(for text: String) -> SearchDirection {
-        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalized.isEmpty else { return .meaningToWord }
-        if normalized.count <= 8, !normalized.contains(where: "。！？、\n".contains) {
-            return .wordToMeaning
-        }
-        return .meaningToWord
-    }
-
     func status() async -> BackendStatus {
         do {
             try await ensureStarted()
@@ -31,9 +22,11 @@ final class SemanticSearchEngine: ObservableObject {
         }
     }
 
-    func search(query: String, direction: SearchDirection, limit: Int = 10) async throws -> SearchResponse {
+    func search(query: String, capturedContext: String?, limit: Int = 10) async throws -> SearchResponse {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return SearchResponse(senses: [], phase: "local") }
+        guard !query.isEmpty else {
+            return SearchResponse(intent: "meaningToWord", query: "", headword: nil, context: nil, senses: [], phase: "local")
+        }
         try await ensureStarted()
         var request = URLRequest(url: baseURL.appending(path: "search"))
         request.httpMethod = "POST"
@@ -41,7 +34,7 @@ final class SemanticSearchEngine: ObservableObject {
         request.timeoutInterval = 20
         request.httpBody = try JSONSerialization.data(withJSONObject: [
             "query": query,
-            "direction": direction == .meaningToWord ? "meaningToWord" : "wordToMeaning",
+            "capturedContext": capturedContext ?? "",
             "limit": limit
         ])
         let (data, response) = try await URLSession.shared.data(for: request)

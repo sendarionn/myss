@@ -169,28 +169,20 @@ class SearchRuntime:
             for word in [record["headword"], *record["aliases"]]:
                 self.word_lookup.setdefault(word, []).append(index)
 
-    def search(self, query: str, direction: str, limit: int):
-        import numpy as np
-
-        if direction == "wordToMeaning":
-            indexes = self.word_lookup.get(query.strip(), [])[:limit]
-            if not indexes:
-                indexes = [index for word, values in self.word_lookup.items() if query.strip() in word for index in values][:limit]
-            scores = [1.0] * len(indexes)
+    def search(self, query: str, captured_context: str, limit: int):
+        resolved = resolve_intent(query, captured_context, self.word_lookup)
+        if resolved["intent"] == "meaningToWord":
+            indexes, scores = self.semantic_search(resolved["query"], limit)
         else:
-            query_embedding = self.model.encode([f"検索クエリ: {query}"], normalize_embeddings=True)[0].astype(np.float32)
-            scores_all = self.embeddings @ query_embedding
-            candidate_count = min(max(limit * 4, limit), len(scores_all))
-            indexes = np.argpartition(scores_all, -candidate_count)[-candidate_count:]
-            indexes = indexes[np.argsort(scores_all[indexes])[::-1]][:limit].tolist()
-            scores = [float(scores_all[index]) for index in indexes]
+            indexes, scores = self.headword_senses(resolved["headword"], resolved.get("context"))
         senses = []
         for index, score in zip(indexes, scores):
             record = dict(self.records[index])
-            if direction == "wordToMeaning" and query.strip() in [record["headword"], *record["aliases"]]:
+            headword = resolved.get("headword")
+            if headword and headword != record["headword"] and headword in record["aliases"]:
                 original_headword = record["headword"]
-                record["headword"] = query.strip()
-                record["aliases"] = [original_headword, *[value for value in record["aliases"] if value != query.strip()]]
+                record["headword"] = headword
+                record["aliases"] = [original_headword, *[value for value in record["aliases"] if value != headword]]
             record["score"] = score
             record["sources"] = [{
                 "name": WORDNET_ATTRIBUTION,
@@ -199,7 +191,63 @@ class SearchRuntime:
                 "license": "WordNet-style permissive license",
             }]
             senses.append(record)
-        return {"senses": senses, "phase": "embedding"}
+        return {**resolved, "senses": senses, "phase": "embedding"}
+
+    def encode_query(self, text: str):
+        import numpy as np
+        return self.model.encode([f"検索クエリ: {text}"], normalize_embeddings=True)[0].astype(np.float32)
+
+    def semantic_search(self, query: str, limit: int):
+        import numpy as np
+
+        scores_all = self.embeddings @ self.encode_query(query)
+        candidate_count = min(limit, len(scores_all))
+        indexes = np.argpartition(scores_all, -candidate_count)[-candidate_count:]
+        indexes = indexes[np.argsort(scores_all[indexes])[::-1]].tolist()
+        return indexes, [float(scores_all[index]) for index in indexes]
+
+    def headword_senses(self, headword: str, context):
+        import numpy as np
+
+        indexes = order_headword_senses(headword, self.word_lookup.get(headword, []), self.records)
+        indexes = indexes[:MAX_HEADWORD_SENSES]
+        if not context or len(indexes) < 2:
+            return indexes, [1.0] * len(indexes)
+        scores = np.asarray(self.embeddings[indexes], dtype=np.float32) @ self.encode_query(context)
+        ranked = sorted(zip(indexes, scores.tolist()), key=lambda item: -item[1])
+        return [index for index, _ in ranked], [float(score) for _, score in ranked]
+
+
+MAX_HEADWORD_SENSES = 50
+
+
+def normalize_query(text: str) -> str:
+    return " ".join(text.split())
+
+
+def resolve_intent(query: str, captured_context: str, word_lookup):
+    normalized = normalize_query(query)
+    captured = (captured_context or "").strip()
+    headword, manual_context = None, None
+    if normalized in word_lookup:
+        headword = normalized
+    else:
+        tokens = normalized.split(" ")
+        for count in range(len(tokens) - 1, 0, -1):
+            candidate = " ".join(tokens[:count])
+            if candidate in word_lookup:
+                headword, manual_context = candidate, " ".join(tokens[count:])
+                break
+    if headword is None:
+        return {"intent": "meaningToWord", "query": normalized}
+    context = "\n".join(value for value in (captured, manual_context) if value)
+    if not context:
+        return {"intent": "wordMeaning", "query": normalized, "headword": headword}
+    return {"intent": "wordMeaningWithContext", "query": normalized, "headword": headword, "context": context}
+
+
+def order_headword_senses(headword: str, indexes, records):
+    return sorted(indexes, key=lambda index: records[index]["headword"] != headword)
 
 
 def serve(data_path: Path, port: int):
@@ -230,7 +278,7 @@ def serve(data_path: Path, port: int):
                 body = json.loads(self.rfile.read(length))
                 result = runtime.search(
                     str(body.get("query", "")),
-                    str(body.get("direction", "meaningToWord")),
+                    str(body.get("capturedContext") or ""),
                     max(1, min(int(body.get("limit", 10)), 20)),
                 )
                 self.send_json(200, result)

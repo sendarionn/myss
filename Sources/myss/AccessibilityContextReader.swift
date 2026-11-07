@@ -17,22 +17,27 @@ final class AccessibilityContextReader {
         guard !isSecure(element) else { return .empty }
 
         let application = NSWorkspace.shared.frontmostApplication
+        let value = stringAttribute(element, kAXValueAttribute)
+        let range = rangeAttribute(element, kAXSelectedTextRangeAttribute)
         if let selected = stringAttribute(element, kAXSelectedTextAttribute), !selected.isEmpty {
+            var surrounding = ""
+            if let value, let range {
+                surrounding = Self.contextAroundCursor(in: value, utf16Location: range.location)
+            }
+            if surrounding == selected.trimmingCharacters(in: .whitespacesAndNewlines) { surrounding = "" }
             return CapturedContext(
-                text: limit(selected), source: .selection,
+                text: limit(selected), surroundingText: surrounding, source: .selection,
                 targetElement: element, sourceApplication: application
             )
         }
 
-        guard let value = stringAttribute(element, kAXValueAttribute),
-              let range = rangeAttribute(element, kAXSelectedTextRangeAttribute)
-        else {
-            return CapturedContext(text: "", source: .none, targetElement: element, sourceApplication: application)
+        guard let value, let range else {
+            return CapturedContext(text: "", surroundingText: "", source: .none, targetElement: element, sourceApplication: application)
         }
 
         let context = Self.contextAroundCursor(in: value, utf16Location: range.location)
         return CapturedContext(
-            text: context, source: context.isEmpty ? .none : .sentence,
+            text: context, surroundingText: "", source: context.isEmpty ? .none : .sentence,
             targetElement: element, sourceApplication: application
         )
     }
