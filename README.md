@@ -31,8 +31,9 @@ Codexを使用して開発しています
   1. `AXSelectedText`
   2. `AXSelectedTextRange` + `AXValue`から切り出し
   3. `AXStringForRangeParameterizedAttribute`
-  4. アプリが選択範囲を公開していない場合だけ`⌘C`で取得し、元のクリップボードを全形式で復元
-- 選択範囲が長さ0（カーソルのみ）の場合は`⌘C`を送りません
+  4. 上記で取得できなければ、ショートカットの修飾キーが離されるのを待ってから`⌘C`を送り、元のクリップボードを全形式で復元
+- `⌘C`で`changeCount`が変わらなければ選択なしとして扱い、古いクリップボードの内容は使いません
+- 設定の「詳細」→「選択取得診断」で、直近の取得経路と文字数を確認できます（文字列そのものは保存しません）
 - パスワード欄（Secure Text Field）とパスワード入力中（Secure Event Input）は読み取らず、`⌘C`も送りません
 - 文書全体は送信しません
 - 設定の「詳細」→「最後にAIへ送信した内容を表示」で確認できます
@@ -69,6 +70,12 @@ Scripts/build-app.sh --install
 ```
 
 `~/Applications/myss.app`へ配置され、以降はFinderから起動できます
+
+修正後の確認では、配置後に旧プロセスを終了して新しいappを起動する`--restart`を付けます
+
+```sh
+Scripts/build-app.sh --install --restart
+```
 
 初回起動時の画面でアクセシビリティを許可し、APIキーを保存して「開始」を押すと利用できます
 TerminalやPythonは不要です

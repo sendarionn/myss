@@ -7,7 +7,8 @@ import Foundation
 @MainActor
 final class ClipboardSelectionReader {
     static let pollInterval: Duration = .milliseconds(15)
-    static let timeout: Duration = .milliseconds(220)
+    static let timeout: Duration = .milliseconds(350)
+    static let modifierReleaseTimeout: Duration = .milliseconds(300)
     private static let cKeyCode: CGKeyCode = 8
 
     private let pasteboard: NSPasteboard
@@ -26,6 +27,9 @@ final class ClipboardSelectionReader {
 
         let snapshot = PasteboardSnapshot(pasteboard)
         let initialChangeCount = pasteboard.changeCount
+        // ショートカットの修飾キーを押したまま⌘Cを送ると、別のキー操作として届くため離されるまで待つ
+        await waitForModifierRelease()
+        guard !IsSecureEventInputEnabled() else { return nil }
         sendCopyShortcut()
 
         let clock = ContinuousClock()
@@ -41,9 +45,17 @@ final class ClipboardSelectionReader {
         return copied
     }
 
+    private func waitForModifierRelease() async {
+        let relevant: CGEventFlags = [.maskCommand, .maskControl, .maskAlternate, .maskShift]
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: Self.modifierReleaseTimeout)
+        while !CGEventSource.flagsState(.combinedSessionState).intersection(relevant).isEmpty, clock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
     private func sendCopyShortcut() {
-        // ショートカットの修飾キーを押したままでも⌘Cだけが届くよう、独立したイベントソースを使う
-        let source = CGEventSource(stateID: .privateState)
+        let source = CGEventSource(stateID: .combinedSessionState)
         let commandKey = CGKeyCode(kVK_Command)
         let events = [
             CGEvent(keyboardEventSource: source, virtualKey: commandKey, keyDown: true),

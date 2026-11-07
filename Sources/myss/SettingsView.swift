@@ -66,6 +66,7 @@ struct SettingsView: View {
     @ObservedObject var settings: SettingsModel
     @ObservedObject private var assistant = LanguageAssistant.shared
     @State private var showsTranscript = false
+    @ObservedObject private var diagnostics = SelectionDiagnosticsStore.shared
 
     var body: some View {
         Form {
@@ -112,6 +113,16 @@ struct SettingsView: View {
                     Text(transcript)
                         .font(.system(.caption2, design: .monospaced))
                         .textSelection(.enabled)
+                }
+                DisclosureGroup("選択取得診断") {
+                    if let last = diagnostics.last {
+                        Text(last.date.formatted(date: .omitted, time: .standard)).font(.caption).foregroundStyle(.secondary)
+                        ForEach(last.lines, id: \.label) { line in
+                            LabeledContent(line.label, value: line.value).font(.caption)
+                        }
+                    } else {
+                        Text("まだ取得していません").font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             }
         }

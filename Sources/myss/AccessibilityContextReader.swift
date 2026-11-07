@@ -1,5 +1,6 @@
 @preconcurrency import AppKit
 @preconcurrency import ApplicationServices
+@preconcurrency import Carbon
 
 enum SelectionAcquisitionMethod: String {
     case selectedTextAttribute
@@ -26,57 +27,54 @@ final class AccessibilityContextReader {
     /// フォーカス要素取得 → secure判定 → 選択取得 → 周辺文脈取得の順に行う
     /// クリップボード方式を含むため、myssのパネルを前面に出す前に呼ぶ
     func capture() async -> CapturedContext {
-        var log = ContextDebugLog()
         let application = NSWorkspace.shared.frontmostApplication
-        guard let element = focusedElement() else {
-            // フォーカス要素を公開しないアプリでは選択状態を確認できないため、⌘Cだけを試す
-            log.add("focusedElement=unavailable")
-            let copied = await clipboardReader.copySelection()
-            log.add("clipboardFallback=\(copied == nil ? "failed" : "success")")
-            defer { log.flush() }
-            guard let copied, let text = Self.limitedSelection(copied) else { return .empty }
-            log.add("selectionMethod=clipboard selectedLength=\((text as NSString).length)")
-            return CapturedContext(
-                selectedText: text, surroundingText: "", cursorOffset: nil,
-                source: .selection, targetElement: nil, sourceApplication: application
-            )
-        }
-        defer { log.flush() }
-        log.add("role=\(stringAttribute(element, kAXRoleAttribute) ?? "unknown")")
-        guard !isSecure(element) else {
-            log.add("secure=true")
+        var diagnostics = SelectionDiagnostics(sourceApp: application?.localizedName ?? "unknown")
+        defer { SelectionDiagnosticsStore.shared.record(diagnostics) }
+
+        guard !IsSecureEventInputEnabled() else {
+            diagnostics.secure = true
             return .empty
         }
-        log.addAttributeNames(of: element)
+        let element = focusedElement()
+        if let element {
+            diagnostics.role = stringAttribute(element, kAXRoleAttribute) ?? "unknown"
+            guard !isSecure(element) else {
+                diagnostics.secure = true
+                return .empty
+            }
+            diagnostics.addAttributeNames(of: element)
+        }
 
-        let value = stringAttribute(element, kAXValueAttribute)
-        let range = rangeAttribute(element, kAXSelectedTextRangeAttribute)
-        log.add(range.map { "selectedRange=location:\($0.location) length:\($0.length)" } ?? "selectedRange=unavailable")
-        log.add("AXValue=\(value == nil ? "unavailable" : "available")")
+        let value = element.flatMap { stringAttribute($0, kAXValueAttribute) }
+        let range = element.flatMap { rangeAttribute($0, kAXSelectedTextRangeAttribute) }
+        diagnostics.selectedRange = range.map { "location=\($0.location) length=\($0.length)" } ?? "unavailable"
+        diagnostics.axValue = value == nil ? "unavailable" : "available"
 
-        var selection = selectedText(from: element, value: value, range: range, log: &log)
-        if selection == nil, range == nil {
-            // 選択範囲を公開していないアプリだけ⌘Cを試す　範囲が取得でき長さ0なら選択なしとして扱う
+        var selection = element.flatMap { selectedText(from: $0, value: value, range: range, diagnostics: &diagnostics) }
+        if Self.needsClipboardFallback(selection: selection) {
+            // 画面上の選択とフォーカス要素の範囲が一致しないアプリがあるため、範囲が長さ0でも⌘Cを試す
+            // changeCountが変わらなければ失敗とし、古いクリップボードの内容は使わない
             let copied = await clipboardReader.copySelection()
-            log.add("clipboardFallback=\(copied == nil ? "failed" : "success")")
+            diagnostics.clipboardFallback = copied == nil ? "failed" : "success"
             if let copied, let text = Self.limitedSelection(copied) {
                 selection = SelectionResult(text: text, range: nil, method: .clipboard)
             }
         }
 
-        let context = surroundingContext(of: element, value: value, range: range)
+        let context = element.flatMap { surroundingContext(of: $0, value: value, range: range) }
         if let selection {
-            log.add("selectionMethod=\(selection.method.rawValue) selectedLength=\((selection.text as NSString).length)")
+            diagnostics.selectionMethod = selection.method.rawValue
+            diagnostics.selectedLength = (selection.text as NSString).length
             var surrounding = context?.text ?? ""
             if surrounding == selection.text.trimmingCharacters(in: .whitespacesAndNewlines) { surrounding = "" }
-            log.add("surroundingLength=\((surrounding as NSString).length)")
+            diagnostics.surroundingLength = (surrounding as NSString).length
             return CapturedContext(
                 selectedText: selection.text, surroundingText: surrounding, cursorOffset: nil,
                 source: .selection, targetElement: element, sourceApplication: application
             )
         }
 
-        log.add("selectionMethod=none surroundingLength=\(((context?.text ?? "") as NSString).length)")
+        diagnostics.surroundingLength = ((context?.text ?? "") as NSString).length
         guard let context, !context.text.isEmpty else {
             return CapturedContext(
                 selectedText: "", surroundingText: "", cursorOffset: nil,
@@ -89,28 +87,35 @@ final class AccessibilityContextReader {
         )
     }
 
+    /// Accessibility APIで選択を確認できなければ、範囲の状態に関係なく⌘Cを試す
+    nonisolated static func needsClipboardFallback(selection: SelectionResult?) -> Bool {
+        selection == nil
+    }
+
     /// Accessibility APIで取得できる選択文字列を優先順に試す
-    private func selectedText(from element: AXUIElement, value: String?, range: CFRange?, log: inout ContextDebugLog) -> SelectionResult? {
+    private func selectedText(
+        from element: AXUIElement, value: String?, range: CFRange?, diagnostics: inout SelectionDiagnostics
+    ) -> SelectionResult? {
         if let selected = stringAttribute(element, kAXSelectedTextAttribute), let text = Self.limitedSelection(selected) {
-            log.add("AXSelectedText=success")
+            diagnostics.axSelectedText = "success"
             return SelectionResult(text: text, range: range, method: .selectedTextAttribute)
         }
-        log.add("AXSelectedText=unavailable")
+        diagnostics.axSelectedText = "failed"
         guard let range, range.length > 0 else { return nil }
 
         if let value {
             if let selected = Self.substring(of: value, range: range), let text = Self.limitedSelection(selected) {
-                log.add("rangeValueFallback=success")
+                diagnostics.rangeAndValue = "success"
                 return SelectionResult(text: text, range: range, method: .selectedTextRangeAndValue)
             }
-            log.add("rangeValueFallback=failed")
+            diagnostics.rangeAndValue = "failed"
         }
 
         if let selected = stringForRange(element, range: range), let text = Self.limitedSelection(selected) {
-            log.add("parameterizedRange=success")
+            diagnostics.parameterizedRange = "success"
             return SelectionResult(text: text, range: range, method: .parameterizedRange)
         }
-        log.add("parameterizedRange=unsupported")
+        diagnostics.parameterizedRange = "failed"
         return nil
     }
 
@@ -245,36 +250,63 @@ final class AccessibilityContextReader {
     }
 }
 
-/// Debug buildだけで取得経路を出力する　選択文字列、周辺文章、クリップボード内容は記録しない
-struct ContextDebugLog {
-    private var lines: [String] = []
+/// 直近の選択取得結果　選択文字列、周辺文章、クリップボード内容は保持しない
+struct SelectionDiagnostics: Equatable {
+    var date = Date()
+    var sourceApp: String
+    var role = "unavailable"
+    var secure = false
+    var selectedRange = "not checked"
+    var axSelectedText = "not checked"
+    var axValue = "not checked"
+    var rangeAndValue = "not checked"
+    var parameterizedRange = "not checked"
+    var clipboardFallback = "not run"
+    var selectionMethod = "none"
+    var selectedLength = 0
+    var surroundingLength = 0
+    var attributeNames: String?
 
-    mutating func add(_ line: @autoclosure () -> String) {
-        #if DEBUG
-        lines.append(line())
-        #endif
+    var lines: [(label: String, value: String)] {
+        var lines: [(String, String)] = [
+            ("Source app", sourceApp),
+            ("Focused role", role),
+            ("Secure input", secure ? "yes" : "no"),
+            ("Selected range", selectedRange),
+            ("AXSelectedText", axSelectedText),
+            ("AXValue", axValue),
+            ("Range + value", rangeAndValue),
+            ("Parameterized range", parameterizedRange),
+            ("Clipboard fallback", clipboardFallback),
+            ("Selection method", selectionMethod),
+            ("Selected length", "\(selectedLength)"),
+            ("Surrounding length", "\(surroundingLength)")
+        ]
+        if let attributeNames { lines.append(("Attributes", attributeNames)) }
+        return lines
     }
 
     /// MYSS_AX_ATTRIBUTES=1の場合だけ、要素が公開している属性名を記録する
     mutating func addAttributeNames(of element: AXUIElement) {
-        #if DEBUG
         guard ProcessInfo.processInfo.environment["MYSS_AX_ATTRIBUTES"] == "1" else { return }
         var names: CFArray?
-        if AXUIElementCopyAttributeNames(element, &names) == .success, let names = names as? [String] {
-            lines.append("attributes=\(names.sorted().joined(separator: ","))")
-        }
         var parameterized: CFArray?
-        if AXUIElementCopyParameterizedAttributeNames(element, &parameterized) == .success,
-           let parameterized = parameterized as? [String] {
-            lines.append("parameterizedAttributes=\(parameterized.sorted().joined(separator: ","))")
-        }
-        #endif
+        _ = AXUIElementCopyAttributeNames(element, &names)
+        _ = AXUIElementCopyParameterizedAttributeNames(element, &parameterized)
+        let all = ((names as? [String]) ?? []) + ((parameterized as? [String]) ?? []).map { "(param)\($0)" }
+        attributeNames = all.sorted().joined(separator: ",")
     }
+}
 
-    func flush() {
+@MainActor
+final class SelectionDiagnosticsStore: ObservableObject {
+    static let shared = SelectionDiagnosticsStore()
+    @Published private(set) var last: SelectionDiagnostics?
+
+    func record(_ diagnostics: SelectionDiagnostics) {
+        last = diagnostics
         #if DEBUG
-        guard !lines.isEmpty else { return }
-        print((["[myss][context]"] + lines).joined(separator: "\n"))
+        print((["[myss][context]"] + diagnostics.lines.map { "\($0.label)=\($0.value)" }).joined(separator: "\n"))
         #endif
     }
 }

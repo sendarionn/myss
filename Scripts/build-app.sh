@@ -30,12 +30,41 @@ rm -rf "$icon_work"
 
 codesign --force --deep --sign - --entitlements "$project_root/App/myss.entitlements" "$app_path"
 
-if [ "${1:-}" = "--install" ]; then
+install=false
+restart=false
+for argument in "$@"; do
+    case "$argument" in
+        --install) install=true ;;
+        --restart) restart=true ;;
+        *) printf '%s\n' "unknown option: $argument" >&2; exit 2 ;;
+    esac
+done
+
+launch_path="$app_path"
+if [ "$install" = true ]; then
     install_root="$HOME/Applications"
     mkdir -p "$install_root"
     rm -rf "$install_root/myss.app"
     cp -R "$app_path" "$install_root/myss.app"
-    printf '%s\n' "$install_root/myss.app"
-else
-    printf '%s\n' "$app_path"
+    launch_path="$install_root/myss.app"
+fi
+printf '%s\n' "$launch_path"
+
+if [ "$restart" = true ]; then
+    # 新しいappの配置が終わってから旧プロセスを終了し、新しいappを起動する
+    if pgrep -x myss >/dev/null; then
+        killall myss 2>/dev/null || true
+        for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+            pgrep -x myss >/dev/null || break
+            sleep 0.1
+        done
+    fi
+    open "$launch_path"
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+        if pid=$(pgrep -f "$launch_path/Contents/MacOS/myss"); then
+            printf '%s\n' "restarted: pid $pid"
+            break
+        fi
+        sleep 0.1
+    done
 fi

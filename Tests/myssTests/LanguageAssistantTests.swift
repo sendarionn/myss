@@ -333,3 +333,26 @@ final class PasteboardSnapshotTests: XCTestCase {
         XCTAssertEqual(items.last?.data(forType: NSPasteboard.PasteboardType("com.example.custom")), Data([1, 2, 3]))
     }
 }
+
+final class ClipboardFallbackConditionTests: XCTestCase {
+    func testFallbackRunsEvenWhenRangeIsZeroLength() {
+        // AXSelectedTextが失敗し、範囲が長さ0でもAX側の選択結果がなければ⌘Cを試す
+        let zeroRange = CFRange(location: 120, length: 0)
+        XCTAssertNil(AccessibilityContextReader.substring(of: String(repeating: "a", count: 200), range: zeroRange))
+        XCTAssertTrue(AccessibilityContextReader.needsClipboardFallback(selection: nil))
+    }
+
+    func testFallbackDoesNotRunWhenAccessibilityFoundSelection() {
+        let selection = SelectionResult(text: "リリース", range: CFRange(location: 3, length: 4), method: .selectedTextAttribute)
+        XCTAssertFalse(AccessibilityContextReader.needsClipboardFallback(selection: selection))
+    }
+
+    func testDiagnosticsDoNotContainSelectedText() {
+        var diagnostics = SelectionDiagnostics(sourceApp: "Google Chrome")
+        diagnostics.selectionMethod = SelectionAcquisitionMethod.clipboard.rawValue
+        diagnostics.selectedLength = 14
+        let rendered = diagnostics.lines.map { "\($0.label)=\($0.value)" }.joined(separator: "\n")
+        XCTAssertTrue(rendered.contains("Selection method=clipboard"))
+        XCTAssertTrue(rendered.contains("Selected length=14"))
+    }
+}
