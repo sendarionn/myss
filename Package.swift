@@ -11,11 +11,11 @@ let package = Package(
         .executableTarget(
             name: "myss",
             path: "Sources/myss",
-            resources: [.copy("Backend")],
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("ApplicationServices"),
-                .linkedFramework("Carbon")
+                .linkedFramework("Carbon"),
+                .linkedFramework("Security")
             ]
         ),
         .testTarget(name: "myssTests", dependencies: ["myss"])

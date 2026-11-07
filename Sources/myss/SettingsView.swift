@@ -58,11 +58,14 @@ final class SettingsModel: ObservableObject {
     }
 }
 
+enum PrivacyNotice {
+    static let text = "myssは回答生成のため、選択文字列や周辺文章を設定されたAIサービスへ送信します\nパスワード欄は読み取りません"
+}
+
 struct SettingsView: View {
     @ObservedObject var settings: SettingsModel
-    @ObservedObject private var setup = SetupManager.shared
-    @ObservedObject private var backend = SemanticSearchEngine.shared
-    @State private var showsSetupDetails = false
+    @ObservedObject private var assistant = LanguageAssistant.shared
+    @State private var showsTranscript = false
 
     var body: some View {
         Form {
@@ -82,28 +85,9 @@ struct SettingsView: View {
                 if let error = settings.hotKeyError { Text(error).foregroundStyle(.red).font(.caption) }
             }
 
-            Section("検索") {
-                StatusRow(label: "検索データ", value: setup.stage.rawValue, success: setup.stage == .ready)
-                StatusRow(label: "バックエンド", value: backend.lifecycleState.label, success: backend.lifecycleState == .ready)
-                LabeledContent("モデル", value: "Ruri v3 70m")
-                if setup.isRunning {
-                    ProgressView(value: setup.progress)
-                    Text(setup.stage.rawValue).font(.caption).foregroundStyle(.secondary)
-                } else {
-                    Button(ApplicationPaths.isSearchDataReady ? "検索データを修復" : "検索データを準備") {
-                        ApplicationPaths.isSearchDataReady ? setup.repairIndex() : setup.prepare()
-                    }
-                }
-                if let error = setup.errorMessage {
-                    Text(error).foregroundStyle(.red).font(.caption)
-                    HStack {
-                        Button("再試行") { setup.retry() }
-                        Button(showsSetupDetails ? "詳細を隠す" : "詳細を表示") { showsSetupDetails.toggle() }
-                    }
-                }
-                if showsSetupDetails, let details = setup.errorDetails {
-                    Text(details).font(.system(.caption2, design: .monospaced)).textSelection(.enabled)
-                }
+            Section("AI") {
+                LabeledContent("Provider", value: assistant.providerKind.label)
+                APIKeyForm(assistant: assistant)
             }
 
             Section("権限") {
@@ -113,25 +97,77 @@ struct SettingsView: View {
                     success: settings.accessibilityGranted
                 )
                 if !settings.accessibilityGranted {
-                    Text("入力中の文章を取得し、選択した語をカーソル位置へ挿入するために使用します\nパスワード欄は読み取りません")
-                        .font(.caption).foregroundStyle(.secondary)
                     Button("アクセシビリティを許可") { settings.requestAccessibility() }
                 }
             }
 
             Section("詳細") {
                 LabeledContent("バージョン", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "開発版")
-                Link("日本語WordNet 2.1", destination: URL(string: "https://bond-lab.github.io/wnja/")!)
-                Text("Ruri v3 70m　Apache License 2.0").font(.caption)
+                LabeledContent("プライバシー") {
+                    Text(PrivacyNotice.text).font(.caption).multilineTextAlignment(.trailing)
+                }
+                Button(showsTranscript ? "送信内容を隠す" : "最後にAIへ送信した内容を表示") { showsTranscript.toggle() }
+                    .disabled(assistant.lastSentTranscript == nil)
+                if showsTranscript, let transcript = assistant.lastSentTranscript {
+                    Text(transcript)
+                        .font(.system(.caption2, design: .monospaced))
+                        .textSelection(.enabled)
+                }
             }
         }
         .formStyle(.grouped)
-        .frame(width: 520, height: 600)
+        .frame(width: 520, height: 560)
         .onAppear { settings.refreshPermissions() }
     }
 }
 
-private struct StatusRow: View {
+struct APIKeyForm: View {
+    @ObservedObject var assistant: LanguageAssistant
+    @State private var draft = ""
+
+    var body: some View {
+        LabeledContent("API Key") {
+            HStack {
+                SecureField(assistant.hasAPIKey ? "保存済み" : "sk-ant-…", text: $draft)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 200)
+                    .onSubmit(save)
+                Button("保存", action: save).disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        LabeledContent("接続状態") {
+            HStack {
+                connectionLabel
+                if assistant.hasAPIKey {
+                    Button("接続確認") { Task { await assistant.verifyConnection() } }
+                        .disabled(assistant.connectionState == .checking)
+                    Button("削除", role: .destructive) { assistant.deleteAPIKey() }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var connectionLabel: some View {
+        switch assistant.connectionState {
+        case .unknown:
+            Text(assistant.hasAPIKey ? "未確認" : "未設定").foregroundStyle(.secondary)
+        case .checking:
+            ProgressView().controlSize(.small)
+        case .connected:
+            Label("接続済み", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+        case let .failed(message):
+            Label(message, systemImage: "exclamationmark.circle").foregroundStyle(.red)
+        }
+    }
+
+    private func save() {
+        let value = draft
+        draft = ""
+        Task { await assistant.saveAPIKey(value) }
+    }
+}
+
+struct StatusRow: View {
     let label: String
     let value: String
     let success: Bool

@@ -6,7 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var hotKeyConfiguration = HotKeyConfiguration.saved
     private let contextReader = AccessibilityContextReader()
     private let hotKeyManager = HotKeyManager()
-    private let model = SearchViewModel()
+    private let model = AssistantViewModel()
     private let settingsModel = SettingsModel()
     private var panel: NSPanel?
     private var statusItem: NSStatusItem?
@@ -28,27 +28,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             object: nil
         )
 
-        if ApplicationPaths.isSearchDataReady {
-            Task { await SemanticSearchEngine.shared.prewarm() }
-        } else {
+        if !UserDefaults.standard.bool(forKey: FirstRunView.completedKey) || !LanguageAssistant.shared.hasAPIKey {
             showFirstRunWindow()
         }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         hotKeyManager.unregister()
-        SemanticSearchEngine.shared.stop()
     }
 
     func menuWillOpen(_ menu: NSMenu) {
-        let backend = SemanticSearchEngine.shared.lifecycleState
-        statusMenuItem?.title = "検索バックエンド　\(backend.label)"
+        statusMenuItem?.title = LanguageAssistant.shared.hasAPIKey ? "AI　設定済み" : "AI　未設定"
         openMenuItem?.title = "myssを開く（\(hotKeyConfiguration.displayName)）"
     }
 
     private func configurePanel() {
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 680, height: 560),
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 460),
             styleMask: [.titled, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -59,14 +55,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isReleasedWhenClosed = false
-        panel.contentView = NSHostingView(rootView: SearchPanelView(model: model))
+        panel.contentView = NSHostingView(rootView: AssistantPanelView(model: model))
         model.onDismiss = { [weak panel] in panel?.orderOut(nil) }
+        model.onOpenSettings = { [weak self, weak panel] in
+            panel?.orderOut(nil)
+            self?.openSettings()
+        }
         self.panel = panel
     }
 
     private func configureSettingsWindow() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 600),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 560),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -79,12 +79,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func configureStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = NSImage(systemSymbolName: "text.magnifyingglass", accessibilityDescription: "myss")
+        item.button?.image = NSImage(systemSymbolName: "text.bubble", accessibilityDescription: "myss")
         let menu = NSMenu()
         menu.delegate = self
         let openItem = menu.addItem(withTitle: "myssを開く（\(hotKeyConfiguration.displayName)）", action: #selector(openFromMenu), keyEquivalent: "")
         openMenuItem = openItem
-        let statusItem = menu.addItem(withTitle: "検索バックエンド　確認中", action: nil, keyEquivalent: "")
+        let statusItem = menu.addItem(withTitle: "AI　確認中", action: nil, keyEquivalent: "")
         statusItem.isEnabled = false
         statusMenuItem = statusItem
         menu.addItem(.separator())
@@ -121,7 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func showFirstRunWindow() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 420),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 480),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
