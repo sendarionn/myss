@@ -254,6 +254,7 @@ final class AccessibilityContextReader {
 struct SelectionDiagnostics: Equatable {
     var date = Date()
     var sourceApp: String
+    var accessibilityTrusted = true
     var role = "unavailable"
     var secure = false
     var selectedRange = "not checked"
@@ -270,6 +271,7 @@ struct SelectionDiagnostics: Equatable {
     var lines: [(label: String, value: String)] {
         var lines: [(String, String)] = [
             ("Source app", sourceApp),
+            ("Accessibility trusted", accessibilityTrusted ? "yes" : "no"),
             ("Focused role", role),
             ("Secure input", secure ? "yes" : "no"),
             ("Selected range", selectedRange),

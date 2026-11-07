@@ -356,3 +356,11 @@ final class ClipboardFallbackConditionTests: XCTestCase {
         XCTAssertTrue(rendered.contains("Selected length=14"))
     }
 }
+
+final class AccessibilityDiagnosticsTests: XCTestCase {
+    func testDiagnosticsShowAccessibilityTrustedState() {
+        var diagnostics = SelectionDiagnostics(sourceApp: "TextEdit")
+        diagnostics.accessibilityTrusted = false
+        XCTAssertTrue(diagnostics.lines.contains { $0.label == "Accessibility trusted" && $0.value == "no" })
+    }
+}

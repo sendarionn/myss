@@ -143,9 +143,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard !isCapturingContext else { return }
         isCapturingContext = true
         Task { @MainActor in
-            let context = AXIsProcessTrusted() ? await contextReader.capture() : .empty
+            let trusted = AXIsProcessTrusted()
+            let context: CapturedContext
+            if trusted {
+                context = await contextReader.capture()
+            } else {
+                // 権限がない場合は取得処理に入れないことを診断に残す
+                var diagnostics = SelectionDiagnostics(sourceApp: NSWorkspace.shared.frontmostApplication?.localizedName ?? "unknown")
+                diagnostics.accessibilityTrusted = false
+                SelectionDiagnosticsStore.shared.record(diagnostics)
+                context = .empty
+            }
             isCapturingContext = false
-            model.begin(with: context)
+            model.begin(with: context, accessibilityTrusted: trusted)
             panel?.center()
             panel?.makeKeyAndOrderFront(nil)
             NSApp.activate()

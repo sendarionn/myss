@@ -57,28 +57,44 @@ Codexを使用して開発しています
 
 ## アプリのビルド
 
-```sh
-Scripts/build-app.sh
-```
-
-`dist/myss.app`が生成されます
-
-開発中のMacへインストールする場合は以下を実行します
-
-```sh
-Scripts/build-app.sh --install
-```
-
-`~/Applications/myss.app`へ配置され、以降はFinderから起動できます
-
-修正後の確認では、配置後に旧プロセスを終了して新しいappを起動する`--restart`を付けます
+標準の開発フローは次の1コマンドです
 
 ```sh
 Scripts/build-app.sh --install --restart
 ```
 
-初回起動時の画面でアクセシビリティを許可し、APIキーを保存して「開始」を押すと利用できます
-TerminalやPythonは不要です
+1. release build
+2. `dist/myss.app`を生成し、固定のcodesigning identityで署名
+3. `codesign --verify`に成功した場合だけ`~/Applications/myss.app`へ配置
+4. 旧myssの終了を確認してから新しいmyssを起動
+
+myssはAccessibility権限を使うため、開発時も固定のcodesigning identityで署名します
+同じbundle identifierと証明書で署名し続けることで、再ビルドしてもAccessibility権限が維持されます
+
+署名identityの決め方
+
+- `MYSS_CODESIGN_IDENTITY`が設定されていればそれを使う
+- 未設定ならKeychain内の`Apple Development` identityを自動検出する
+- 見つからない場合や複数ある場合はエラーで終了し、ad-hoc署名へは戻さない
+
+```sh
+export MYSS_CODESIGN_IDENTITY="Apple Development: ..."
+```
+
+ad-hoc署名が必要な場合だけ`--adhoc`を付けます（Accessibility権限は再ビルドごとに外れる可能性があります）
+
+### 初回セットアップ
+
+1. `security find-identity -v -p codesigning`でApple Development identityを確認
+2. `Scripts/build-app.sh --install --restart`
+3. システム設定の「プライバシーとセキュリティ」→「アクセシビリティ」でmyssを許可
+4. 初回起動画面でAPIキーを保存して接続確認し、「開始」を押す
+
+以降はコードを修正して`Scripts/build-app.sh --install --restart`を実行するだけで確認できます
+TerminalやPythonは利用に不要です
+
+Accessibility権限がない場合は、パネル上部に「アクセシビリティ権限がありません」と表示されます
+設定の「詳細」→「選択取得診断」の`Accessibility trusted`でも確認できます
 
 ## 開発用実行
 

@@ -39,7 +39,15 @@ struct AssistantPanelView: View {
                     .onChange(of: model.instruction) { _, _ in model.instructionChanged() }
                 if model.isLoading && model.response != nil { ProgressView().controlSize(.small) }
             }
-            if !model.subject.isEmpty {
+            if !model.accessibilityTrusted {
+                HStack(spacing: 8) {
+                    Label("アクセシビリティ権限がありません　設定からmyssを許可してください", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    Button("設定を開く") { model.onOpenSettings?() }
+                        .controlSize(.small)
+                }
+            } else if !model.subject.isEmpty {
                 Text(model.subject)
                     .font(.caption)
                     .foregroundStyle(.secondary)

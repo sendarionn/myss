@@ -45,3 +45,11 @@
 - ホットキーの修飾キーが離されるまで最大300ms待ってから、通常セッションのイベントソースで`⌘C`を送る
 - Release版でも設定の「選択取得診断」で直近の取得経路を確認できる
 - `Scripts/build-app.sh --install --restart`で配置後に新しいappへ入れ替える
+
+## 2026-11-08 開発用署名の固定
+
+- ad-hoc署名では再ビルドごとにTCC上の識別が変わり、Accessibility権限が外れて`AXIsProcessTrusted()`がfalseになりうる
+- `build-app.sh`はApple Development identity（または`MYSS_CODESIGN_IDENTITY`）で署名し、ad-hoc署名へは黙って戻さない
+- 署名後に`codesign --verify --deep --strict`が成功しなければ配置と再起動を行わない
+- designated requirementは`identifier "io.github.sendarionn.myss"`と証明書のCNで決まり、再ビルド後も変わらないことを確認した
+- 標準の確認手順は`Scripts/build-app.sh --install --restart`

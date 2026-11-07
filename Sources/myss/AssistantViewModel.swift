@@ -43,6 +43,7 @@ final class AssistantViewModel: ObservableObject {
     @Published private(set) var error: LanguageAssistantError?
     @Published private(set) var errorMessage: String?
     @Published private(set) var context = CapturedContext.empty
+    @Published private(set) var accessibilityTrusted = true
 
     var onDismiss: (() -> Void)?
     var onOpenSettings: (() -> Void)?
@@ -69,9 +70,10 @@ final class AssistantViewModel: ObservableObject {
         return text.split(whereSeparator: \.isNewline).joined(separator: " ")
     }
 
-    func begin(with context: CapturedContext) {
+    func begin(with context: CapturedContext, accessibilityTrusted: Bool = true) {
         requestTask?.cancel()
         self.context = context
+        self.accessibilityTrusted = accessibilityTrusted
         session = RefinementSession()
         instruction = ""
         response = nil
