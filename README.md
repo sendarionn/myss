@@ -35,9 +35,18 @@ Codexを使用して開発しています
 
 ## AI Provider
 
-- 現在の実装はAnthropic（`claude-opus-5-5`、effort `low`、structured outputs）
+- 現在のAI ProviderはOpenAI
+- モデルは`gpt-6-luna`（reasoning effort `none`）
+- Responses API（`POST /v1/responses`）+ Structured Outputsを使用
 - APIキーはmacOSキーチェーンへ保存します
+- 接続確認も`/v1/responses`への最小の問い合わせで行います
 - Providerは`LanguageAssistantProvider`で抽象化しているため、他のサービスやmyss側バックエンドへ差し替えられます
+
+必要なAPIキー権限
+
+- Restricted
+- Model capabilities: Request
+- その他: None（`List models`は不要）
 
 ## アプリのビルド
 

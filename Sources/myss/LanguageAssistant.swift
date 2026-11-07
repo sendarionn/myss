@@ -1,13 +1,9 @@
 import Foundation
 
 enum AIProviderKind: String, CaseIterable, Identifiable {
-    case anthropic
+    case openAI = "openai"
     var id: Self { self }
-    var label: String {
-        switch self {
-        case .anthropic: "Anthropic"
-        }
-    }
+    var label: String { "OpenAI" }
     var keychainAccount: String { "\(rawValue)-api-key" }
 }
 
@@ -27,14 +23,14 @@ final class LanguageAssistant: ObservableObject {
     @Published private(set) var connectionState: ConnectionState = .unknown
     @Published private(set) var lastSentTranscript: String?
 
-    let providerKind = AIProviderKind.anthropic
+    let providerKind = AIProviderKind.openAI
     private var apiKey: String?
     private var cache = ResponseCache()
     private let makeProvider: (String) -> any LanguageAssistantProvider
 
     init(
-        apiKey: String? = KeychainStore.read(account: AIProviderKind.anthropic.keychainAccount),
-        makeProvider: @escaping (String) -> any LanguageAssistantProvider = { AnthropicLanguageProvider(apiKey: $0) }
+        apiKey: String? = KeychainStore.read(account: AIProviderKind.openAI.keychainAccount),
+        makeProvider: @escaping (String) -> any LanguageAssistantProvider = { OpenAILanguageProvider(apiKey: $0) }
     ) {
         self.apiKey = apiKey
         self.makeProvider = makeProvider
@@ -54,15 +50,23 @@ final class LanguageAssistant: ObservableObject {
     func saveAPIKey(_ value: String) async {
         let key = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return }
+        connectionState = .unknown
         do {
             try KeychainStore.save(key, account: providerKind.keychainAccount)
+            // 保存できたことを読み戻して確認してから設定済みとする　キーそのものは記録しない
+            guard KeychainStore.read(account: providerKind.keychainAccount) == key else {
+                throw LanguageAssistantError.keychainReadBack
+            }
             apiKey = key
             hasAPIKey = true
             cache = ResponseCache()
-            await verifyConnection()
         } catch {
+            apiKey = nil
+            hasAPIKey = false
             connectionState = .failed(error.localizedDescription)
+            return
         }
+        await verifyConnection()
     }
 
     func deleteAPIKey() {

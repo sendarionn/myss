@@ -55,40 +55,101 @@ final class LanguagePromptTests: XCTestCase {
         XCTAssertEqual(messages[2]["content"], "<instruction>もっと堅く</instruction>")
     }
 
-    func testRequestBodyUsesStructuredOutput() throws {
-        let request = LanguageRequest(selectedText: "敷衍", surroundingContext: "", cursorOffset: nil, history: [], manualInstruction: "")
-        let body = AnthropicLanguageProvider.body(for: request)
+}
+
+final class OpenAIRequestTests: XCTestCase {
+    private let request = LanguageRequest(selectedText: "敷衍", surroundingContext: "", cursorOffset: nil, history: [], manualInstruction: "")
+
+    func testRequestBodyUsesResponsesStructuredOutput() throws {
+        let body = OpenAILanguageProvider.body(for: request)
         XCTAssertTrue(JSONSerialization.isValidJSONObject(body))
-        let output = try XCTUnwrap(body["output_config"] as? [String: Any])
-        let format = try XCTUnwrap(output["format"] as? [String: Any])
+        XCTAssertEqual(body["model"] as? String, "gpt-6-luna")
+        XCTAssertEqual((body["reasoning"] as? [String: Any])?["effort"] as? String, "none")
+        XCTAssertEqual(body["store"] as? Bool, false)
+        XCTAssertEqual(body["instructions"] as? String, LanguagePrompt.system)
+        XCTAssertEqual((body["input"] as? [[String: String]])?.first?["role"], "user")
+        let text = try XCTUnwrap(body["text"] as? [String: Any])
+        let format = try XCTUnwrap(text["format"] as? [String: Any])
         XCTAssertEqual(format["type"] as? String, "json_schema")
+        XCTAssertEqual(format["strict"] as? Bool, true)
+        XCTAssertEqual(format["name"] as? String, "language_response")
+        let schema = try XCTUnwrap(format["schema"] as? [String: Any])
+        XCTAssertEqual(schema["required"] as? [String], ["intent", "summary", "candidates"])
+        for key in ["output_config", "fallbacks", "system", "max_tokens"] { XCTAssertNil(body[key]) }
+    }
+
+    func testRequestUsesBearerAuthorizationOnResponsesEndpoint() throws {
+        let urlRequest = try OpenAILanguageProvider.urlRequest(apiKey: "test-key", body: OpenAILanguageProvider.verificationBody)
+        XCTAssertEqual(urlRequest.url?.absoluteString, "https://api.openai.com/v1/responses")
+        XCTAssertEqual(urlRequest.httpMethod, "POST")
+        XCTAssertEqual(urlRequest.value(forHTTPHeaderField: "Authorization"), "Bearer test-key")
+        XCTAssertNil(urlRequest.value(forHTTPHeaderField: "x-api-key"))
+        XCTAssertNil(urlRequest.value(forHTTPHeaderField: "anthropic-version"))
+    }
+
+    func testVerificationAlsoUsesResponsesModel() {
+        XCTAssertEqual(OpenAILanguageProvider.verificationBody["model"] as? String, "gpt-6-luna")
     }
 }
 
-final class AnthropicResponseTests: XCTestCase {
-    private func message(text: String, stopReason: String = "end_turn") throws -> Data {
-        try JSONSerialization.data(withJSONObject: [
-            "content": [["type": "thinking", "thinking": ""], ["type": "text", "text": text]],
-            "stop_reason": stopReason
-        ])
+final class OpenAIResponseTests: XCTestCase {
+    private func response(text: String? = nil, status: String = "completed", refusal: String? = nil, reason: String? = nil) throws -> Data {
+        var content: [[String: Any]] = []
+        if let text { content.append(["type": "output_text", "text": text]) }
+        if let refusal { content.append(["type": "refusal", "refusal": refusal]) }
+        var body: [String: Any] = [
+            "status": status,
+            "output": [["type": "reasoning", "summary": []], ["type": "message", "role": "assistant", "content": content]]
+        ]
+        if let reason { body["incomplete_details"] = ["reason": reason] }
+        return try JSONSerialization.data(withJSONObject: body)
     }
 
     func testParsesCandidatesAndDropsDuplicates() throws {
-        let json = #"{"intent":"find_expression","summary":"表面だけに対応すること","candidates":[{"text":"対症療法","explanation":"原因ではなく症状に対応する"},{"text":" 対症療法 ","explanation":"重複"},{"text":"その場しのぎ","explanation":"否定的"}]}"#
-        let response = try AnthropicLanguageProvider.parse(message(text: json))
-        XCTAssertEqual(response.intent, .findExpression)
-        XCTAssertEqual(response.candidates.map(\.text), ["対症療法", "その場しのぎ"])
+        let json = #"{"intent":"find_expression","summary":" 表面だけに対応すること ","candidates":[{"text":"対症療法","explanation":"原因ではなく症状に対応する"},{"text":" 対症療法 ","explanation":"重複"},{"text":"その場しのぎ","explanation":"否定的"}]}"#
+        let parsed = try OpenAILanguageProvider.parse(response(text: json))
+        XCTAssertEqual(parsed.intent, .findExpression)
+        XCTAssertEqual(parsed.summary, "表面だけに対応すること")
+        XCTAssertEqual(parsed.candidates.map(\.text), ["対症療法", "その場しのぎ"])
+    }
+
+    func testCandidatesAreLimitedToTen() throws {
+        let items = (1...12).map { #"{"text":"候補\#($0)","explanation":""}"# }.joined(separator: ",")
+        let json = #"{"intent":"rewrite","summary":"","candidates":[\#(items)]}"#
+        XCTAssertEqual(try OpenAILanguageProvider.parse(response(text: json)).candidates.count, 10)
     }
 
     func testUnknownIntentFallsBackToUnknown() throws {
         let json = #"{"intent":"something_new","summary":"","candidates":[]}"#
-        XCTAssertEqual(try AnthropicLanguageProvider.parse(message(text: json)).intent, .unknown)
+        XCTAssertEqual(try OpenAILanguageProvider.parse(response(text: json)).intent, .unknown)
     }
 
-    func testRefusalIsReported() throws {
-        XCTAssertThrowsError(try AnthropicLanguageProvider.parse(message(text: "", stopReason: "refusal"))) {
-            XCTAssertEqual($0 as? LanguageAssistantError, .refused)
+    func testFailuresMapToAssistantErrors() throws {
+        func assertError(_ data: Data, _ expected: LanguageAssistantError, line: UInt = #line) {
+            XCTAssertThrowsError(try OpenAILanguageProvider.parse(data), line: line) {
+                XCTAssertEqual($0 as? LanguageAssistantError, expected, line: line)
+            }
         }
+        assertError(try response(refusal: "できません"), .refused)
+        assertError(try response(text: #"{"intent":"#, status: "incomplete", reason: "max_output_tokens"), .truncated)
+        assertError(try response(), .invalidResponse)
+        assertError(try response(text: "not json"), .invalidResponse)
+        assertError(Data("<html>".utf8), .invalidResponse)
+    }
+
+    func testHTTPStatusMapsToAssistantErrors() {
+        func assertStatus(_ status: Int, body: String = "{}", _ expected: LanguageAssistantError, line: UInt = #line) {
+            let response = HTTPURLResponse(url: URL(string: "https://api.openai.com/v1/responses")!, statusCode: status, httpVersion: nil, headerFields: nil)!
+            XCTAssertThrowsError(try OpenAILanguageProvider.checkStatus(response, data: Data(body.utf8)), line: line) {
+                XCTAssertEqual($0 as? LanguageAssistantError, expected, line: line)
+            }
+        }
+        assertStatus(401, .invalidAPIKey)
+        assertStatus(403, .insufficientPermission)
+        assertStatus(429, body: #"{"error":{"message":"slow down","code":"rate_limit_exceeded"}}"#, .rateLimited)
+        assertStatus(429, body: #"{"error":{"message":"quota","code":"insufficient_quota"}}"#, .quotaExceeded)
+        assertStatus(500, .temporaryServerError)
+        assertStatus(503, .temporaryServerError)
     }
 }
 

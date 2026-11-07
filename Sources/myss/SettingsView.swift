@@ -128,7 +128,8 @@ struct APIKeyForm: View {
     var body: some View {
         LabeledContent("API Key") {
             HStack {
-                SecureField(assistant.hasAPIKey ? "保存済み" : "sk-ant-…", text: $draft)
+                Text(assistant.hasAPIKey ? "保存済み" : "未設定").foregroundStyle(.secondary)
+                SecureField("sk-…", text: $draft)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 200)
                     .onSubmit(save)

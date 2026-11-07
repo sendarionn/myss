@@ -16,3 +16,10 @@
 - 選択文字列、周辺文脈、追加指示をAIへ渡し、structured outputsで`intent`、`summary`、`candidates`を受け取る
 - 追加指示は400ms debounce、古い応答はgeneration IDで破棄
 - 既存ユーザーの`~/Library/Application Support/myss`は自動削除しない
+
+## 2026-11-07 AI ProviderをOpenAIへ変更
+
+- Anthropic実装を削除し、OpenAI Responses API（`gpt-6-luna`）へ移行
+- Keychainのアカウントは`openai-api-key`　旧`anthropic-api-key`は参照せず移行もしない
+- 接続確認は`/v1/models`ではなく`/v1/responses`で行い、`Model capabilities: Request`だけで完結させる
+- APIキー保存後はKeychainから読み戻して一致を確認する

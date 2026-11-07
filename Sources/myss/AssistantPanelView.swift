@@ -54,7 +54,7 @@ struct AssistantPanelView: View {
         if let message = model.errorMessage {
             VStack(spacing: 12) {
                 ContentUnavailableView("回答できません", systemImage: "exclamationmark.bubble", description: Text(message))
-                if model.error == .missingAPIKey || model.error == .invalidAPIKey {
+                if [.missingAPIKey, .invalidAPIKey, .insufficientPermission].contains(model.error) {
                     Button("設定を開く") { model.onOpenSettings?() }
                 } else {
                     Button("再試行") { model.retry() }

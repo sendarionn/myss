@@ -73,8 +73,11 @@ protocol LanguageAssistantProvider: Sendable {
 enum LanguageAssistantError: LocalizedError, Equatable {
     case missingAPIKey
     case invalidAPIKey
+    case insufficientPermission
     case rateLimited
-    case overloaded
+    case quotaExceeded
+    case temporaryServerError
+    case keychainReadBack
     case refused
     case truncated
     case invalidResponse
@@ -84,8 +87,11 @@ enum LanguageAssistantError: LocalizedError, Equatable {
         switch self {
         case .missingAPIKey: "APIキーが未設定です"
         case .invalidAPIKey: "APIキーが無効です"
-        case .rateLimited: "リクエストが多すぎます　少し待ってから再試行してください"
-        case .overloaded: "AIサービスが混雑しています　少し待ってから再試行してください"
+        case .insufficientPermission: "APIキーの権限が不足しています"
+        case .rateLimited: "レート制限に達しています　少し待ってから再試行してください"
+        case .quotaExceeded: "利用上限に達しています"
+        case .temporaryServerError: "OpenAI APIで一時的なエラーが発生しています"
+        case .keychainReadBack: "APIキーをキーチェーンから読み戻せませんでした"
         case .refused: "この内容には回答できませんでした"
         case .truncated: "回答が途中で終了しました"
         case .invalidResponse: "AIサービスから不正な応答を受信しました"

@@ -38,12 +38,17 @@ struct FirstRunView: View {
                     onComplete()
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(!assistant.hasAPIKey)
+                .disabled(!assistant.hasAPIKey || assistant.connectionState != .connected)
             }
         }
         .padding(20)
         .frame(width: 520)
-        .onAppear { settings.refreshPermissions() }
+        .onAppear {
+            settings.refreshPermissions()
+            if assistant.hasAPIKey, assistant.connectionState == .unknown {
+                Task { await assistant.verifyConnection() }
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             settings.refreshPermissions()
         }
