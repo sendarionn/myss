@@ -26,48 +26,29 @@ final class ContextExtractionTests: XCTestCase {
 }
 
 final class LanguagePromptTests: XCTestCase {
-    private let release = LanguageResponse(intent: .explainExpression, targetExpression: "リリース", summary: "公開すること", candidates: [])
+    func testPromptContainsOnlyQueryWhenNoContext() {
+        XCTAssertEqual(LanguagePrompt.prompt(for: LanguageRequest(query: "residency OpenAI APIでは")), "<query>residency OpenAI APIでは</query>")
+    }
 
-    func testPromptMarksCursorAndKeepsInputsSeparate() {
-        let request = LanguageRequest(
-            selectedText: "", surroundingContext: "抑えるだけなので、", cursorOffset: 9,
-            history: [], manualInstruction: "熟語で"
-        )
+    func testPromptAddsSurroundingContextAsAuxiliaryInformation() {
+        let request = LanguageRequest(query: "リリース", surroundingContext: "新製品のリリース時期を来月へ変更する。")
         XCTAssertEqual(LanguagePrompt.prompt(for: request), """
-        <selected_text></selected_text>
-        <context>抑えるだけなので、\(LanguagePrompt.cursorMarker)</context>
-        <instruction>熟語で</instruction>
+        <query>リリース</query>
+        <context>新製品のリリース時期を来月へ変更する。</context>
         """)
     }
 
-    func testFollowUpPromptCarriesPreviousContextAndAnswer() {
-        let request = LanguageRequest(
-            selectedText: "residency", surroundingContext: "", cursorOffset: nil,
-            history: [
-                LanguageTurn(instruction: "", response: LanguageResponse(intent: .explainExpression, targetExpression: "residency", summary: "居住、滞在", candidates: [])),
-                LanguageTurn(instruction: "APIでは", response: LanguageResponse(intent: .explainExpression, targetExpression: "residency", summary: "データの保存地域", candidates: []))
-            ],
-            manualInstruction: "クラウドでは"
-        )
-        let prompt = LanguagePrompt.prompt(for: request)
-        XCTAssertTrue(prompt.contains("<selected_text>residency</selected_text>"))
-        XCTAssertTrue(prompt.contains("<instruction>APIでは</instruction>"))
-        XCTAssertTrue(prompt.contains("summary: データの保存地域"))
-        XCTAssertTrue(prompt.hasSuffix("最新のinstructionを加えた現在の結果を1つ返してください"))
-        XCTAssertTrue(prompt.contains("<instruction>クラウドでは</instruction>"))
+    func testSurroundingContextIsDroppedOnceSelectionLeavesQuery() {
+        let sentence = "新製品のリリース時期を来月へ変更する。"
+        XCTAssertEqual(LanguageRequest.make(query: "リリース ビジネスでは", selectedText: "リリース", surroundingText: sentence).surroundingContext, sentence)
+        XCTAssertEqual(LanguageRequest.make(query: "製品を公開すること", selectedText: "リリース", surroundingText: sentence).surroundingContext, "")
+        XCTAssertEqual(LanguageRequest.make(query: "residency", selectedText: "", surroundingText: sentence).surroundingContext, "")
     }
 
-    func testDescribeIncludesTargetAndCandidates() {
-        let response = LanguageResponse(intent: .findExpression, summary: "", candidates: [
-            LanguageCandidate(text: "対症療法", explanation: ""), LanguageCandidate(text: "応急処置", explanation: "")
-        ])
-        XCTAssertEqual(LanguagePrompt.describe(response), "intent: find_expression / candidates: 対症療法、応急処置")
-        XCTAssertTrue(LanguagePrompt.describe(release).contains("target_expression: リリース"))
-    }
-
-    func testPromptDoesNotDecideIntentFromSelectionAlone() {
-        XCTAssertTrue(LanguagePrompt.system.contains("選択文字列の有無だけでintentを決めない"))
-        XCTAssertFalse(LanguagePrompt.system.contains("追加指示がなければexplain_expression"))
+    func testPromptDoesNotDistinguishSelectionFromTypedText() {
+        XCTAssertFalse(LanguagePrompt.system.contains("selected_text"))
+        XCTAssertFalse(LanguagePrompt.system.contains("instruction"))
+        XCTAssertTrue(LanguagePrompt.system.contains("選択した文字列と、後から書き足した文字列は区別されない"))
     }
 }
 
@@ -107,34 +88,10 @@ final class GeneratedResponseConversionTests: XCTestCase {
     }
 }
 
-final class RefinementSessionTests: XCTestCase {
-    private func response(_ summary: String) -> LanguageResponse {
-        LanguageResponse(intent: .rewrite, summary: summary, candidates: [])
-    }
-
-    func testEditingSameInstructionReplacesTurnAndNewInstructionCommitsIt() {
-        var session = RefinementSession()
-        let initial = session.history(for: "")
-        XCTAssertEqual(initial, [])
-        session.didAnswer(history: initial, instruction: "", response: response("R0"))
-
-        let first = session.history(for: "もっと")
-        XCTAssertEqual(first.map(\.instruction), [""])
-        session.didAnswer(history: first, instruction: "もっと", response: response("R1"))
-
-        XCTAssertEqual(session.history(for: "もっと堅く").map(\.instruction), [""])
-        session.didAnswer(history: first, instruction: "もっと堅く", response: response("R2"))
-
-        let second = session.history(for: "名詞で")
-        XCTAssertEqual(second.map(\.instruction), ["", "もっと堅く"])
-        XCTAssertEqual(second.last?.response.summary, "R2")
-    }
-}
-
 final class ResponseCacheTests: XCTestCase {
     func testCachedResponseExpires() {
         var cache = ResponseCache()
-        let request = LanguageRequest(selectedText: "敷衍", surroundingContext: "", cursorOffset: nil, history: [], manualInstruction: "")
+        let request = LanguageRequest(query: "敷衍")
         let response = LanguageResponse(intent: .explainExpression, summary: "", candidates: [])
         let now = Date()
         cache.insert(response, for: request, now: now)
@@ -157,7 +114,7 @@ final class LanguageAssistantTests: XCTestCase {
         func increment() { value += 1 }
     }
 
-    private let request = LanguageRequest(selectedText: "", surroundingContext: "一時的に抑える", cursorOffset: 7, history: [], manualInstruction: "")
+    private let request = LanguageRequest(query: "一時的に抑えること")
 
     @MainActor
     func testSameRequestIsServedFromCache() async throws {
@@ -190,20 +147,20 @@ final class LiveOnDeviceModelTests: XCTestCase {
     func testRepresentativeCases() async throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["MYSS_LIVE_MODEL"] == "1", "実機確認時だけ実行")
         let provider = AppleLanguageProvider()
-        let cases: [(String, String, [LanguageTurn])] = [
-            ("プレーンテキスト", "", []),
-            ("", "プレーンテキスト プログラミングでは", []),
-            ("", "プログラミングなどでの、シンプルなテキストファイルのこと", []),
-            ("", "営業でいうリード", []),
-            ("", "見込み客や将来顧客になる可能性のある相手", []),
-            ("リリース", "もっと堅く", [])
+        let queries = [
+            "プレーンテキスト",
+            "プレーンテキスト プログラミングでは",
+            "プログラミングなどでの、シンプルなテキストファイルのこと",
+            "営業でいうリード",
+            "見込み客や将来顧客になる可能性のある相手",
+            "リリース もっと堅く"
         ]
-        for (selected, instruction, history) in cases {
-            let request = LanguageRequest(selectedText: selected, surroundingContext: "", cursorOffset: nil, history: history, manualInstruction: instruction)
+        for query in queries {
+            let request = LanguageRequest(query: query)
             let clock = ContinuousClock()
             let start = clock.now
             let response = try await provider.request(request)
-            print("[live] selected=\(selected) instruction=\(instruction) elapsed=\(clock.now - start)")
+            print("[live] query=\(query) elapsed=\(clock.now - start)")
             print("[live]   intent=\(response.intent.rawValue) target=\(response.targetExpression ?? "nil")")
             print("[live]   summary=\(response.summary)")
             print("[live]   candidates=\(response.candidates.map(\.text))")
@@ -296,5 +253,125 @@ final class AccessibilityDiagnosticsTests: XCTestCase {
         var diagnostics = SelectionDiagnostics(sourceApp: "TextEdit")
         diagnostics.accessibilityTrusted = false
         XCTAssertTrue(diagnostics.lines.contains { $0.label == "Accessibility trusted" && $0.value == "no" })
+    }
+}
+
+final class SearchHistoryStoreTests: XCTestCase {
+    @MainActor
+    private func makeStore(limit: Int = 100) -> SearchHistoryStore {
+        let url = FileManager.default.temporaryDirectory.appending(path: "myss-history-\(UUID().uuidString).json")
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        return SearchHistoryStore(fileURL: url, limit: limit)
+    }
+
+    private let response = LanguageResponse(intent: .explainExpression, targetExpression: "residency", summary: "居住、滞在", candidates: [])
+
+    @MainActor
+    func testRecordPersistsNewestFirstAndSkipsDuplicateOfLatest() {
+        let store = makeStore()
+        store.record(query: "residency", response: response)
+        XCTAssertNil(store.record(query: "residency", response: response))
+        store.record(query: "residency APIでは", response: response)
+        XCTAssertEqual(store.items.map(\.query), ["residency APIでは", "residency"])
+
+        let reloaded = SearchHistoryStore(fileURL: store.fileURL)
+        XCTAssertEqual(reloaded.items, store.items)
+    }
+
+    @MainActor
+    func testOldestItemsAreDroppedOverLimit() {
+        let store = makeStore(limit: 3)
+        for index in 1...5 { store.record(query: "q\(index)", response: response) }
+        XCTAssertEqual(store.items.map(\.query), ["q5", "q4", "q3"])
+    }
+}
+
+final class AssistantHistoryFlowTests: XCTestCase {
+    private struct EchoProvider: LanguageAssistantProvider {
+        func request(_ request: LanguageRequest) async throws -> LanguageResponse {
+            LanguageResponse(intent: .explainExpression, targetExpression: nil, summary: "意味: \(request.query)", candidates: [])
+        }
+    }
+
+    @MainActor
+    private func makeModel() -> AssistantViewModel {
+        let url = FileManager.default.temporaryDirectory.appending(path: "myss-history-\(UUID().uuidString).json")
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        let assistant = LanguageAssistant(provider: EchoProvider()) { .available }
+        return AssistantViewModel(assistant: assistant, historyStore: SearchHistoryStore(fileURL: url), debounce: .milliseconds(1))
+    }
+
+    private func selection(_ text: String) -> CapturedContext {
+        CapturedContext(selectedText: text, surroundingText: "", cursorOffset: nil, source: .selection, targetElement: nil, sourceApplication: nil)
+    }
+
+    @MainActor
+    private func waitForResponse(_ model: AssistantViewModel, query: String) async throws {
+        for _ in 0..<200 {
+            if model.response?.summary == "意味: \(query)", !model.isLoading { return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTFail("response for \(query) did not arrive")
+    }
+
+    @MainActor
+    private func type(_ text: String, into model: AssistantViewModel) {
+        model.queryText = text
+        model.queryChanged()
+    }
+
+    @MainActor
+    func testSelectionFillsQueryAndOnlyFinalResultIsSaved() async throws {
+        let model = makeModel()
+        model.begin(with: selection("residency"))
+        XCTAssertEqual(model.queryText, "residency")
+        XCTAssertFalse(model.isShowingHistory)
+        try await waitForResponse(model, query: "residency")
+
+        type("residency API", into: model)
+        type("residency APIでは", into: model)
+        try await waitForResponse(model, query: "residency APIでは")
+        model.dismiss()
+
+        XCTAssertEqual(model.historyItems.map(\.query), ["residency APIでは"])
+    }
+
+    @MainActor
+    func testEmptyLaunchAndClearingShowHistory() async throws {
+        let model = makeModel()
+        model.begin(with: .empty)
+        XCTAssertTrue(model.isShowingHistory)
+
+        type("プレーンテキスト", into: model)
+        try await waitForResponse(model, query: "プレーンテキスト")
+        type("", into: model)
+        XCTAssertTrue(model.isShowingHistory)
+        XCTAssertNil(model.response)
+        XCTAssertEqual(model.historyItems.map(\.query), ["プレーンテキスト"])
+    }
+
+    @MainActor
+    func testOpeningHistoryRestoresWithoutDuplicatingAndEditsBecomeNewItem() async throws {
+        let model = makeModel()
+        model.begin(with: selection("residency APIでは"))
+        try await waitForResponse(model, query: "residency APIでは")
+        model.dismiss()
+
+        model.begin(with: .empty)
+        let original = try XCTUnwrap(model.historyItems.first)
+        model.openHistory(original)
+        XCTAssertEqual(model.queryText, "residency APIでは")
+        XCTAssertEqual(model.response, original.response)
+        model.dismiss()
+        XCTAssertEqual(model.historyItems.count, 1)
+
+        model.begin(with: .empty)
+        model.openHistory(original)
+        type("residency OpenAI APIでは", into: model)
+        try await waitForResponse(model, query: "residency OpenAI APIでは")
+        model.dismiss()
+
+        XCTAssertEqual(model.historyItems.map(\.query), ["residency OpenAI APIでは", "residency APIでは"])
+        XCTAssertEqual(model.historyItems.last, original)
     }
 }

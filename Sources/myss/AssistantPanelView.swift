@@ -2,24 +2,28 @@ import SwiftUI
 
 struct AssistantPanelView: View {
     @ObservedObject var model: AssistantViewModel
+    @ObservedObject private var historyStore: SearchHistoryStore
     @FocusState private var inputFocused: Bool
+
+    init(model: AssistantViewModel) {
+        self.model = model
+        historyStore = model.historyStore
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             inputBar
             Divider()
             content
-            Divider()
-            footer
         }
-        .frame(width: 600, height: 460)
+        .frame(width: 600, height: 440)
         .background(.regularMaterial)
         .onAppear { inputFocused = true }
         .onMoveCommand { direction in
             if direction == .up { model.moveSelection(-1) }
             if direction == .down { model.moveSelection(1) }
         }
-        .onExitCommand { model.onDismiss?() }
+        .onExitCommand { model.dismiss() }
         .background {
             Button("コピー") { model.copySelection() }
                 .keyboardShortcut(.return, modifiers: .command)
@@ -28,16 +32,15 @@ struct AssistantPanelView: View {
     }
 
     private var inputBar: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
-                Image(systemName: "text.bubble").foregroundStyle(.secondary)
-                TextField(model.context.isEmpty ? "語や表現について入力" : "追加の指示", text: $model.instruction)
+                TextField("入力…", text: $model.queryText)
                     .textFieldStyle(.plain)
                     .font(.system(size: 17))
                     .focused($inputFocused)
                     .onSubmit { model.primaryAction() }
-                    .onChange(of: model.instruction) { _, _ in model.instructionChanged() }
-                if model.isLoading && model.response != nil { ProgressView().controlSize(.small) }
+                    .onChange(of: model.queryText) { _, _ in model.queryChanged() }
+                if model.isLoading { ProgressView().controlSize(.small) }
             }
             if !model.accessibilityTrusted {
                 HStack(spacing: 8) {
@@ -47,21 +50,18 @@ struct AssistantPanelView: View {
                     Button("設定を開く") { model.onOpenSettings?() }
                         .controlSize(.small)
                 }
-            } else if !model.subject.isEmpty {
-                Text(model.subject)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
             }
         }
         .padding(14)
     }
 
     @ViewBuilder private var content: some View {
-        if let message = model.errorMessage {
+        if model.isShowingHistory {
+            historyList
+        } else if let message = model.errorMessage {
             VStack(spacing: 12) {
-                ContentUnavailableView("回答できません", systemImage: "exclamationmark.bubble", description: Text(message))
+                Label(message, systemImage: "exclamationmark.bubble")
+                    .foregroundStyle(.secondary)
                 if case .modelUnavailable = model.error {
                     Button("設定を開く") { model.onOpenSettings?() }
                 } else {
@@ -71,15 +71,33 @@ struct AssistantPanelView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let response = model.response {
             responseView(response)
-        } else if model.isLoading {
-            VStack(spacing: 10) {
-                ProgressView().controlSize(.small)
-                Text("考えています…").foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            ContentUnavailableView("文章を選択するか入力してください", systemImage: "text.cursor")
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var historyList: some View {
+        ScrollViewReader { proxy in
+            List(Array(historyStore.items.enumerated()), id: \.element.id) { index, item in
+                HStack(spacing: 10) {
+                    Image(systemName: "clock").foregroundStyle(.tertiary)
+                    Text(item.query).lineLimit(1).truncationMode(.tail)
+                    Spacer(minLength: 8)
+                    Text(item.createdAt, format: .relative(presentation: .numeric))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .id(item.id)
+                .listRowInsets(.init(top: 6, leading: 14, bottom: 6, trailing: 14))
+                .listRowBackground(index == model.selectedIndex ? Color.accentColor.opacity(0.16) : Color.clear)
+                .contentShape(Rectangle())
+                .onTapGesture { model.openHistory(item) }
+            }
+            .listStyle(.plain)
+            .onChange(of: model.selectedIndex) { _, index in
+                guard historyStore.items.indices.contains(index) else { return }
+                proxy.scrollTo(historyStore.items[index].id)
+            }
         }
     }
 
@@ -114,20 +132,6 @@ struct AssistantPanelView: View {
                 proxy.scrollTo(response.candidates[index].id)
             }
         }
-    }
-
-    private var footer: some View {
-        HStack {
-            Text(model.context.source.rawValue)
-            Spacer()
-            Text(model.candidates.isEmpty
-                 ? "⌘↩ コピー   esc 閉じる"
-                 : "↕ 選択   ↩ 挿入   ⌘↩ コピー   esc 閉じる")
-        }
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 12)
-        .frame(height: 30)
     }
 }
 

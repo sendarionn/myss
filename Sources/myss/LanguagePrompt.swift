@@ -1,8 +1,6 @@
 import Foundation
 
 enum LanguagePrompt {
-    static let cursorMarker = "【カーソル】"
-    static let maximumHistoryTurns = 4
 
     static let system = """
     あなたはmacOSで文章を入力している人のための言語アシスタントです
@@ -10,23 +8,22 @@ enum LanguagePrompt {
     与えられた情報から、今必要としている言語操作を推定して答えてください
 
     与えられる情報
-    - selected_text: ユーザーが選択している文字列　空の場合は選択なし
-    - context: 選択箇所またはカーソル周辺の文章　\(cursorMarker)はカーソル位置
-    - instruction: パネルに入力された文字列　追加指示の場合も、それ自体が質問の場合もある　空の場合は入力なし
+    - query: ユーザーが入力欄に書いた文字列　選択した文字列と、後から書き足した文字列は区別されない
+    - context: queryの元になった文章の周辺　ない場合は空
 
     意図の推定
-    - selected_text、context、instruction、直前のやり取りの全体から、ユーザーが何を求めているかを推定する
+    - queryの全体から、ユーザーが何を求めているかを毎回推定する
     - 表面的な語順、文字数、特定の助詞だけでintentを決めない
-    - 選択文字列の有無だけでintentを決めない　選択文字列は強いヒントだが、instructionの要求を優先する
     - 自然な省略表現や断片的な入力も、会話的に意図を補って解釈する
     - 特定の語句が提示され、その語句について特定の分野・状況・文脈での意味を知りたがっている場合はexplain_expression
     - 特定の語句は提示されず、意味・特徴・用途・定義などの説明から適切な語を探している場合はfind_expression
     - 説明対象として認識した語句をtarget_expressionに入れる　説明対象がなければnull
+    - contextは語句がどの文章で使われているかの手がかりとして使う
 
     intent
     - find_expression: 説明や文脈が表している概念に合う語・表現を提案する
     - explain_expression: 提示された語句の、指定された分野や文脈での意味を説明する
-    - rewrite: 選択された文字列や指定された表現を言い換える（短く、堅く、柔らかく、ビジネス向けなど）
+    - rewrite: 提示された表現を言い換える（短く、堅く、柔らかく、ビジネス向けなど）
     - compare_expressions: 似た語句のニュアンスの違いを説明する
     - continue_text: カーソル位置に自然に続く語句を提案する
     - unknown: 言語・文章操作として解釈できない
@@ -38,12 +35,12 @@ enum LanguagePrompt {
     - 「製品やサービスを公開・提供開始すること」→ find_expression、候補に「リリース」
     - 「営業でいうリード」→ explain_expression、target_expressionは「リード」
     - 「変更内容を履歴として確定して保存する操作」→ find_expression、候補に「コミット」
-    - 「リリース」を選択し、instructionが「もっと堅く」→ rewrite
-    - 「リリース」を選択し、instructionが空 → 多くの場合explain_expression
+    - 「リリース もっと堅く」→ rewrite
+    - 「residency」→ explain_expression　「residency APIでは」→ API分野での意味を説明
 
     candidatesの規則
     - Enterで選択した候補がそのまま文章へ入力される
-    - 選択がある場合は選択文字列を置き換え、選択がない場合はカーソル位置へ挿入される
+    - ユーザーが元の文章で選択していた箇所を置き換える
     - textには入力する文字列だけを入れる　引用符、番号、説明を含めない
     - find_expression、rewrite、continue_textでは3〜10件返し、最も適切なものを先頭に置く
     - explain_expressionでは原則として空配列にする　類義語、別の言い方、似た表現を求められた場合だけ返す
@@ -63,37 +60,11 @@ enum LanguagePrompt {
     """
 
     /// オンデバイスモデルへ渡す単一のプロンプト
-    /// 過去の指示と回答を含め、現在までに与えられた文脈全体から現在の結果を1つ生成させる
     static func prompt(for request: LanguageRequest) -> String {
-        var context = request.surroundingContext
-        if let offset = request.cursorOffset {
-            let nsContext = context as NSString
-            let location = max(0, min(offset, nsContext.length))
-            context = nsContext.replacingCharacters(in: NSRange(location: location, length: 0), with: cursorMarker)
-        }
-        var sections = [
-            "<selected_text>\(request.selectedText)</selected_text>",
-            "<context>\(context)</context>"
-        ]
-        let history = Array(request.history.suffix(maximumHistoryTurns))
-        if !history.isEmpty {
-            let turns = history.map { turn in
-                "<turn>\n<instruction>\(turn.instruction)</instruction>\n<answer>\(describe(turn.response))</answer>\n</turn>"
-            }
-            sections.append("<history>\n\(turns.joined(separator: "\n"))\n</history>")
-        }
-        sections.append("<instruction>\(request.manualInstruction)</instruction>")
-        if !history.isEmpty {
-            sections.append("historyの指示はすべて有効な文脈として引き継ぎ、最新のinstructionを加えた現在の結果を1つ返してください")
+        var sections = ["<query>\(request.query)</query>"]
+        if !request.surroundingContext.isEmpty {
+            sections.append("<context>\(request.surroundingContext)</context>")
         }
         return sections.joined(separator: "\n")
-    }
-
-    static func describe(_ response: LanguageResponse) -> String {
-        var parts = ["intent: \(response.intent.rawValue)"]
-        if let target = response.targetExpression { parts.append("target_expression: \(target)") }
-        if !response.summary.isEmpty { parts.append("summary: \(response.summary)") }
-        if !response.candidates.isEmpty { parts.append("candidates: \(response.candidates.map(\.text).joined(separator: "、"))") }
-        return parts.joined(separator: " / ")
     }
 }

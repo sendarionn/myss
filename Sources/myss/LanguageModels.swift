@@ -25,7 +25,7 @@ enum ContextSource: String {
     case none = "手入力"
 }
 
-enum LanguageIntent: String, Hashable, Sendable, CaseIterable {
+enum LanguageIntent: String, Codable, Hashable, Sendable, CaseIterable {
     case findExpression = "find_expression"
     case explainExpression = "explain_expression"
     case rewrite
@@ -34,13 +34,13 @@ enum LanguageIntent: String, Hashable, Sendable, CaseIterable {
     case unknown
 }
 
-struct LanguageCandidate: Hashable, Sendable, Identifiable {
+struct LanguageCandidate: Codable, Hashable, Sendable, Identifiable {
     let text: String
     let explanation: String
     var id: String { text }
 }
 
-struct LanguageResponse: Hashable, Sendable {
+struct LanguageResponse: Codable, Hashable, Sendable {
     let intent: LanguageIntent
     /// AIが説明対象として認識した語句　なければnil
     let targetExpression: String?
@@ -74,18 +74,18 @@ struct LanguageResponse: Hashable, Sendable {
     }
 }
 
-struct LanguageTurn: Hashable, Sendable {
-    let instruction: String
-    let response: LanguageResponse
-}
-
+/// 現在の入力欄の文字列だけで毎回意図を推定させる　過去の回答は会話として積まない
 struct LanguageRequest: Hashable, Sendable {
-    var selectedText: String
-    var surroundingContext: String
-    var cursorOffset: Int?
-    /// 同じパネル内で完了した過去の指示と回答
-    var history: [LanguageTurn]
-    var manualInstruction: String
+    var query: String
+    /// 選択元の周辺文章　入力欄に選択文字列が残っている間だけ補助情報として渡す
+    var surroundingContext: String = ""
+
+    /// 選択文字列が入力欄から消えたら、周辺文章は現在の入力と無関係とみなして渡さない
+    static func make(query: String, selectedText: String, surroundingText: String) -> LanguageRequest {
+        let selected = selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let keepsSelection = !selected.isEmpty && query.contains(selected)
+        return LanguageRequest(query: query, surroundingContext: keepsSelection ? surroundingText : "")
+    }
 }
 
 protocol LanguageAssistantProvider: Sendable {

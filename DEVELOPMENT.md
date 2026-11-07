@@ -62,3 +62,10 @@
 - エラーはmacOS 27の`LanguageModelError`と、macOS 26の`LanguageModelSession.GenerationError`の両方を変換
 - 実モデルの代表例は`MYSS_LIVE_MODEL=1 swift test --filter LiveOnDeviceModelTests`で確認する（出力文は固定しない）
 - 2026-11-08時点の開発Macでは`availability`が`modelNotReady`のままで、実生成は未確認
+
+## 2026-11-08 入力欄の統合と履歴
+
+- 選択文字列と追加入力を`queryText`に統合し、`RefinementSession`と会話履歴を廃止
+- `LanguageRequest`は`query`と補助の`surroundingContext`だけ　周辺文章は選択文字列が入力欄に残っている間だけ渡す
+- 選択なしで起動すると履歴を表示するため、カーソル周辺の文から自動で語を探す動作はなくなった
+- 履歴は`history.json`へ最大100件　日時はISO 8601だと秒未満が落ちて読み戻し時に一致しないため、標準のDateエンコードを使う

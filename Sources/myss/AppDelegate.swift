@@ -60,6 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         panel.contentView = NSHostingView(rootView: AssistantPanelView(model: model))
         model.onDismiss = { [weak panel] in panel?.orderOut(nil) }
         model.onOpenSettings = { [weak self, weak panel] in
+            self?.model.commitCurrentResult()
             panel?.orderOut(nil)
             self?.openSettings()
         }
