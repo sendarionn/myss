@@ -26,130 +26,84 @@ final class ContextExtractionTests: XCTestCase {
 }
 
 final class LanguagePromptTests: XCTestCase {
-    private let release = LanguageResponse(intent: .explainExpression, summary: "公開すること", candidates: [])
+    private let release = LanguageResponse(intent: .explainExpression, targetExpression: "リリース", summary: "公開すること", candidates: [])
 
-    func testFirstMessageMarksCursorAndKeepsInputsSeparate() {
+    func testPromptMarksCursorAndKeepsInputsSeparate() {
         let request = LanguageRequest(
             selectedText: "", surroundingContext: "抑えるだけなので、", cursorOffset: 9,
             history: [], manualInstruction: "熟語で"
         )
-        let messages = LanguagePrompt.messages(for: request)
-        XCTAssertEqual(messages.count, 1)
-        XCTAssertEqual(messages[0]["content"], """
+        XCTAssertEqual(LanguagePrompt.prompt(for: request), """
         <selected_text></selected_text>
         <context>抑えるだけなので、\(LanguagePrompt.cursorMarker)</context>
         <instruction>熟語で</instruction>
         """)
     }
 
-    func testFollowUpInstructionsAreSentAfterPreviousAnswers() {
+    func testFollowUpPromptCarriesPreviousContextAndAnswer() {
         let request = LanguageRequest(
-            selectedText: "リリース", surroundingContext: "新製品のリリース時期を来月へ変更する。", cursorOffset: nil,
-            history: [LanguageTurn(instruction: "", response: release)], manualInstruction: "もっと堅く"
+            selectedText: "residency", surroundingContext: "", cursorOffset: nil,
+            history: [
+                LanguageTurn(instruction: "", response: LanguageResponse(intent: .explainExpression, targetExpression: "residency", summary: "居住、滞在", candidates: [])),
+                LanguageTurn(instruction: "APIでは", response: LanguageResponse(intent: .explainExpression, targetExpression: "residency", summary: "データの保存地域", candidates: []))
+            ],
+            manualInstruction: "クラウドでは"
         )
-        let messages = LanguagePrompt.messages(for: request)
-        XCTAssertEqual(messages.map { $0["role"] }, ["user", "assistant", "user"])
-        XCTAssertTrue(messages[0]["content"]!.contains("<selected_text>リリース</selected_text>"))
-        XCTAssertTrue(messages[0]["content"]!.contains("<instruction></instruction>"))
-        XCTAssertTrue(messages[1]["content"]!.contains("公開すること"))
-        XCTAssertEqual(messages[2]["content"], "<instruction>もっと堅く</instruction>")
+        let prompt = LanguagePrompt.prompt(for: request)
+        XCTAssertTrue(prompt.contains("<selected_text>residency</selected_text>"))
+        XCTAssertTrue(prompt.contains("<instruction>APIでは</instruction>"))
+        XCTAssertTrue(prompt.contains("summary: データの保存地域"))
+        XCTAssertTrue(prompt.hasSuffix("最新のinstructionを加えた現在の結果を1つ返してください"))
+        XCTAssertTrue(prompt.contains("<instruction>クラウドでは</instruction>"))
     }
 
-}
-
-final class OpenAIRequestTests: XCTestCase {
-    private let request = LanguageRequest(selectedText: "敷衍", surroundingContext: "", cursorOffset: nil, history: [], manualInstruction: "")
-
-    func testRequestBodyUsesResponsesStructuredOutput() throws {
-        let body = OpenAILanguageProvider.body(for: request)
-        XCTAssertTrue(JSONSerialization.isValidJSONObject(body))
-        XCTAssertEqual(body["model"] as? String, "gpt-6-luna")
-        XCTAssertEqual((body["reasoning"] as? [String: Any])?["effort"] as? String, "none")
-        XCTAssertEqual(body["store"] as? Bool, false)
-        XCTAssertEqual(body["instructions"] as? String, LanguagePrompt.system)
-        XCTAssertEqual((body["input"] as? [[String: String]])?.first?["role"], "user")
-        let text = try XCTUnwrap(body["text"] as? [String: Any])
-        let format = try XCTUnwrap(text["format"] as? [String: Any])
-        XCTAssertEqual(format["type"] as? String, "json_schema")
-        XCTAssertEqual(format["strict"] as? Bool, true)
-        XCTAssertEqual(format["name"] as? String, "language_response")
-        let schema = try XCTUnwrap(format["schema"] as? [String: Any])
-        XCTAssertEqual(schema["required"] as? [String], ["intent", "target_expression", "summary", "candidates"])
-        for key in ["output_config", "fallbacks", "system", "max_tokens"] { XCTAssertNil(body[key]) }
+    func testDescribeIncludesTargetAndCandidates() {
+        let response = LanguageResponse(intent: .findExpression, summary: "", candidates: [
+            LanguageCandidate(text: "対症療法", explanation: ""), LanguageCandidate(text: "応急処置", explanation: "")
+        ])
+        XCTAssertEqual(LanguagePrompt.describe(response), "intent: find_expression / candidates: 対症療法、応急処置")
+        XCTAssertTrue(LanguagePrompt.describe(release).contains("target_expression: リリース"))
     }
 
-    func testRequestUsesBearerAuthorizationOnResponsesEndpoint() throws {
-        let urlRequest = try OpenAILanguageProvider.urlRequest(apiKey: "test-key", body: OpenAILanguageProvider.verificationBody)
-        XCTAssertEqual(urlRequest.url?.absoluteString, "https://api.openai.com/v1/responses")
-        XCTAssertEqual(urlRequest.httpMethod, "POST")
-        XCTAssertEqual(urlRequest.value(forHTTPHeaderField: "Authorization"), "Bearer test-key")
-        XCTAssertNil(urlRequest.value(forHTTPHeaderField: "x-api-key"))
-        XCTAssertNil(urlRequest.value(forHTTPHeaderField: "anthropic-version"))
-    }
-
-    func testVerificationAlsoUsesResponsesModel() {
-        XCTAssertEqual(OpenAILanguageProvider.verificationBody["model"] as? String, "gpt-6-luna")
+    func testPromptDoesNotDecideIntentFromSelectionAlone() {
+        XCTAssertTrue(LanguagePrompt.system.contains("選択文字列の有無だけでintentを決めない"))
+        XCTAssertFalse(LanguagePrompt.system.contains("追加指示がなければexplain_expression"))
     }
 }
 
-final class OpenAIResponseTests: XCTestCase {
-    private func response(text: String? = nil, status: String = "completed", refusal: String? = nil, reason: String? = nil) throws -> Data {
-        var content: [[String: Any]] = []
-        if let text { content.append(["type": "output_text", "text": text]) }
-        if let refusal { content.append(["type": "refusal", "refusal": refusal]) }
-        var body: [String: Any] = [
-            "status": status,
-            "output": [["type": "reasoning", "summary": []], ["type": "message", "role": "assistant", "content": content]]
+final class GeneratedResponseConversionTests: XCTestCase {
+    func testConversionTrimsDeduplicatesAndLimitsCandidates() {
+        let candidates = [GeneratedCandidate(text: "対症療法", explanation: " 原因ではなく症状に対応する "), GeneratedCandidate(text: " 対症療法 ", explanation: "重複")]
+            + (1...12).map { GeneratedCandidate(text: "候補\($0)", explanation: "") }
+        let generated = GeneratedLanguageResponse(intent: .findExpression, targetExpression: "  ", summary: " 表面だけに対応すること ", candidates: candidates)
+        let response = generated.languageResponse
+        XCTAssertEqual(response.intent, .findExpression)
+        XCTAssertNil(response.targetExpression)
+        XCTAssertEqual(response.summary, "表面だけに対応すること")
+        XCTAssertEqual(response.candidates.count, 10)
+        XCTAssertEqual(response.candidates.first, LanguageCandidate(text: "対症療法", explanation: "原因ではなく症状に対応する"))
+        XCTAssertEqual(response.candidates.filter { $0.text == "対症療法" }.count, 1)
+    }
+
+    func testConversionKeepsTargetExpression() {
+        let generated = GeneratedLanguageResponse(intent: .explainExpression, targetExpression: " プレーンテキスト ", summary: "書式を持たない文字データ", candidates: [])
+        XCTAssertEqual(generated.languageResponse.targetExpression, "プレーンテキスト")
+        XCTAssertEqual(generated.languageResponse.intent, .explainExpression)
+    }
+
+    func testEveryGeneratedIntentMapsToLanguageIntent() {
+        let pairs: [(GeneratedIntent, LanguageIntent)] = [
+            (.findExpression, .findExpression), (.explainExpression, .explainExpression), (.rewrite, .rewrite),
+            (.compareExpressions, .compareExpressions), (.continueText, .continueText), (.unknown, .unknown)
         ]
-        if let reason { body["incomplete_details"] = ["reason": reason] }
-        return try JSONSerialization.data(withJSONObject: body)
+        for (generated, expected) in pairs { XCTAssertEqual(generated.languageIntent, expected) }
     }
 
-    func testParsesCandidatesAndDropsDuplicates() throws {
-        let json = #"{"intent":"find_expression","summary":" 表面だけに対応すること ","candidates":[{"text":"対症療法","explanation":"原因ではなく症状に対応する"},{"text":" 対症療法 ","explanation":"重複"},{"text":"その場しのぎ","explanation":"否定的"}]}"#
-        let parsed = try OpenAILanguageProvider.parse(response(text: json))
-        XCTAssertEqual(parsed.intent, .findExpression)
-        XCTAssertEqual(parsed.summary, "表面だけに対応すること")
-        XCTAssertEqual(parsed.candidates.map(\.text), ["対症療法", "その場しのぎ"])
-    }
-
-    func testCandidatesAreLimitedToTen() throws {
-        let items = (1...12).map { #"{"text":"候補\#($0)","explanation":""}"# }.joined(separator: ",")
-        let json = #"{"intent":"rewrite","summary":"","candidates":[\#(items)]}"#
-        XCTAssertEqual(try OpenAILanguageProvider.parse(response(text: json)).candidates.count, 10)
-    }
-
-    func testUnknownIntentFallsBackToUnknown() throws {
-        let json = #"{"intent":"something_new","summary":"","candidates":[]}"#
-        XCTAssertEqual(try OpenAILanguageProvider.parse(response(text: json)).intent, .unknown)
-    }
-
-    func testFailuresMapToAssistantErrors() throws {
-        func assertError(_ data: Data, _ expected: LanguageAssistantError, line: UInt = #line) {
-            XCTAssertThrowsError(try OpenAILanguageProvider.parse(data), line: line) {
-                XCTAssertEqual($0 as? LanguageAssistantError, expected, line: line)
-            }
-        }
-        assertError(try response(refusal: "できません"), .refused)
-        assertError(try response(text: #"{"intent":"#, status: "incomplete", reason: "max_output_tokens"), .truncated)
-        assertError(try response(), .invalidResponse)
-        assertError(try response(text: "not json"), .invalidResponse)
-        assertError(Data("<html>".utf8), .invalidResponse)
-    }
-
-    func testHTTPStatusMapsToAssistantErrors() {
-        func assertStatus(_ status: Int, body: String = "{}", _ expected: LanguageAssistantError, line: UInt = #line) {
-            let response = HTTPURLResponse(url: URL(string: "https://api.openai.com/v1/responses")!, statusCode: status, httpVersion: nil, headerFields: nil)!
-            XCTAssertThrowsError(try OpenAILanguageProvider.checkStatus(response, data: Data(body.utf8)), line: line) {
-                XCTAssertEqual($0 as? LanguageAssistantError, expected, line: line)
-            }
-        }
-        assertStatus(401, .invalidAPIKey)
-        assertStatus(403, .insufficientPermission)
-        assertStatus(429, body: #"{"error":{"message":"slow down","code":"rate_limit_exceeded"}}"#, .rateLimited)
-        assertStatus(429, body: #"{"error":{"message":"quota","code":"insufficient_quota"}}"#, .quotaExceeded)
-        assertStatus(500, .temporaryServerError)
-        assertStatus(503, .temporaryServerError)
+    func testUnavailableReasonsHaveMessages() {
+        XCTAssertEqual(LanguageAssistantError.modelUnavailable(.appleIntelligenceNotEnabled).localizedDescription,
+                       "Apple Intelligenceが無効です　システム設定で有効にしてください")
+        XCTAssertEqual(LanguageAssistantError.modelUnavailable(.deviceNotEligible).localizedDescription,
+                       "このMacはApple Intelligenceに対応していません")
     }
 }
 
@@ -196,7 +150,6 @@ final class LanguageAssistantTests: XCTestCase {
             await counter.increment()
             return LanguageResponse(intent: .findExpression, summary: "", candidates: [LanguageCandidate(text: "対症療法", explanation: "")])
         }
-        func verify() async throws {}
     }
 
     actor Counter {
@@ -204,76 +157,57 @@ final class LanguageAssistantTests: XCTestCase {
         func increment() { value += 1 }
     }
 
+    private let request = LanguageRequest(selectedText: "", surroundingContext: "一時的に抑える", cursorOffset: 7, history: [], manualInstruction: "")
+
     @MainActor
     func testSameRequestIsServedFromCache() async throws {
         let counter = Counter()
-        let assistant = LanguageAssistant(apiKey: "test") { _ in CountingProvider(counter: counter) }
-        let request = LanguageRequest(selectedText: "", surroundingContext: "一時的に抑える", cursorOffset: 7, history: [], manualInstruction: "")
+        let assistant = LanguageAssistant(provider: CountingProvider(counter: counter)) { .available }
         _ = try await assistant.respond(to: request)
         _ = try await assistant.respond(to: request)
         let count = await counter.value
         XCTAssertEqual(count, 1)
-        XCTAssertNotNil(assistant.lastSentTranscript)
+        XCTAssertNotNil(assistant.lastPrompt)
     }
 
     @MainActor
-    func testMissingAPIKeyIsReported() async {
-        let assistant = LanguageAssistant(apiKey: nil)
+    func testUnavailableModelIsReportedWithoutCallingProvider() async {
+        let counter = Counter()
+        let assistant = LanguageAssistant(provider: CountingProvider(counter: counter)) { .appleIntelligenceNotEnabled }
         do {
-            _ = try await assistant.respond(to: LanguageRequest(selectedText: "a", surroundingContext: "", cursorOffset: nil, history: [], manualInstruction: ""))
+            _ = try await assistant.respond(to: request)
             XCTFail("expected error")
         } catch {
-            XCTAssertEqual(error as? LanguageAssistantError, .missingAPIKey)
+            XCTAssertEqual(error as? LanguageAssistantError, .modelUnavailable(.appleIntelligenceNotEnabled))
         }
+        let count = await counter.value
+        XCTAssertEqual(count, 0)
     }
 }
 
-
-final class TargetExpressionTests: XCTestCase {
-    private func parse(_ json: String) throws -> LanguageResponse {
-        let body: [String: Any] = [
-            "status": "completed",
-            "output": [["type": "message", "role": "assistant", "content": [["type": "output_text", "text": json]]]]
+/// MYSS_LIVE_MODEL=1のときだけ実際のオンデバイスモデルで代表例を実行する　出力文は固定しない
+final class LiveOnDeviceModelTests: XCTestCase {
+    func testRepresentativeCases() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["MYSS_LIVE_MODEL"] == "1", "実機確認時だけ実行")
+        let provider = AppleLanguageProvider()
+        let cases: [(String, String, [LanguageTurn])] = [
+            ("プレーンテキスト", "", []),
+            ("", "プレーンテキスト プログラミングでは", []),
+            ("", "プログラミングなどでの、シンプルなテキストファイルのこと", []),
+            ("", "営業でいうリード", []),
+            ("", "見込み客や将来顧客になる可能性のある相手", []),
+            ("リリース", "もっと堅く", [])
         ]
-        return try OpenAILanguageProvider.parse(JSONSerialization.data(withJSONObject: body))
-    }
-
-    func testSchemaRequiresNullableTargetExpression() throws {
-        let schema = LanguagePrompt.responseSchema
-        let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
-        let target = try XCTUnwrap(properties["target_expression"] as? [String: Any])
-        XCTAssertEqual(target["type"] as? [String], ["string", "null"])
-        XCTAssertTrue((schema["required"] as? [String] ?? []).contains("target_expression"))
-    }
-
-    func testExplanationDecodesTargetExpression() throws {
-        let response = try parse(#"{"intent":"explain_expression","target_expression":"プレーンテキスト","summary":"書式情報を持たない文字データ","candidates":[]}"#)
-        XCTAssertEqual(response.intent, .explainExpression)
-        XCTAssertEqual(response.targetExpression, "プレーンテキスト")
-        XCTAssertTrue(response.candidates.isEmpty)
-    }
-
-    func testSearchDecodesNullTargetExpression() throws {
-        let response = try parse(#"{"intent":"find_expression","target_expression":null,"summary":"","candidates":[{"text":"プレーンテキスト","explanation":"文字情報だけのテキスト"}]}"#)
-        XCTAssertEqual(response.intent, .findExpression)
-        XCTAssertNil(response.targetExpression)
-        XCTAssertEqual(response.candidates.map(\.text), ["プレーンテキスト"])
-    }
-
-    func testPreviousAnswerSentToAIKeepsNullTargetExpression() throws {
-        let previous = LanguageResponse(intent: .findExpression, summary: "", candidates: [])
-        let request = LanguageRequest(
-            selectedText: "", surroundingContext: "", cursorOffset: nil,
-            history: [LanguageTurn(instruction: "シンプルなテキストファイル", response: previous)],
-            manualInstruction: "意味を教えて"
-        )
-        let assistantMessage = try XCTUnwrap(LanguagePrompt.messages(for: request)[1]["content"])
-        XCTAssertTrue(assistantMessage.contains(#""target_expression":null"#))
-    }
-
-    func testPromptDoesNotDecideIntentFromSelectionAlone() {
-        XCTAssertTrue(LanguagePrompt.system.contains("選択文字列の有無だけでintentを決めない"))
-        XCTAssertFalse(LanguagePrompt.system.contains("追加指示がなければexplain_expression"))
+        for (selected, instruction, history) in cases {
+            let request = LanguageRequest(selectedText: selected, surroundingContext: "", cursorOffset: nil, history: history, manualInstruction: instruction)
+            let clock = ContinuousClock()
+            let start = clock.now
+            let response = try await provider.request(request)
+            print("[live] selected=\(selected) instruction=\(instruction) elapsed=\(clock.now - start)")
+            print("[live]   intent=\(response.intent.rawValue) target=\(response.targetExpression ?? "nil")")
+            print("[live]   summary=\(response.summary)")
+            print("[live]   candidates=\(response.candidates.map(\.text))")
+        }
     }
 }
 

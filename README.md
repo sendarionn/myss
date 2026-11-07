@@ -1,18 +1,26 @@
 # myss
 
-文章入力中に、選択文字列と周辺の文章をAIへ渡して語・意味・表現を相談し、その場で挿入できるmacOSアプリ
+Apple IntelligenceのオンデバイスLLMを利用するmacOS言語アシスタント
+選択文字列と周辺の文章から語・意味・表現をMac上で解釈し、その場で挿入できます
 
 Codexを使用して開発しています
+
+## 動作環境
+
+- macOS 26以降
+- Apple Intelligence対応Mac（Apple Intelligenceを有効にし、オンデバイスモデルの準備が完了していること）
+- APIキー不要、AI利用料不要
+- 文章を外部AIサービスへ送信しません
 
 ## 使い方
 
 1. 任意のアプリで文章を書いている途中に`⌃⌥⌘K`を押す
-2. パネルが開くと同時に、選択文字列と周辺の文章を使ってAIへ問い合わせる
+2. パネルが開くと同時に、選択文字列と周辺の文章をオンデバイスAIで処理する
    - 語を選択している場合 → その文脈での意味を表示
    - 選択せずに説明的な文を書いている場合 → その意味に合う語の候補を表示
 3. 必要なら上部の欄に追加の指示を入力する（例: `もっと堅く`、`名詞で`、`短く`）
-   - 入力が止まって400ms経つと、現在の回答を踏まえて再問い合わせする
-   - 別の指示に書き換えると、直前の回答を踏まえて続けて修正する
+   - 入力が止まって400ms経つと、古い生成をキャンセルし、それまでの文脈を含めて再生成する
+   - 例: `residency` → `APIでは` → `クラウドでは`のように文脈を足すと、現在の意味が1つの結果として更新される
 4. 候補を選んで確定する
    - `↑` / `↓`: 候補を移動
    - `Enter`: 選択中の候補を元の位置へ挿入（選択文字列があれば置き換え）
@@ -22,7 +30,7 @@ Codexを使用して開発しています
 
 検索モードの選択はなく、意図はAIが判定します
 
-## AIへ送信する内容
+## オンデバイスAIで処理する内容
 
 - 選択文字列（最大600文字）
 - 選択箇所またはカーソルを含む文と前後1文（最大400文字）
@@ -35,25 +43,18 @@ Codexを使用して開発しています
 - `⌘C`で`changeCount`が変わらなければ選択なしとして扱い、古いクリップボードの内容は使いません
 - 設定の「詳細」→「選択取得診断」で、直近の取得経路と文字数を確認できます（文字列そのものは保存しません）
 - パスワード欄（Secure Text Field）とパスワード入力中（Secure Event Input）は読み取らず、`⌘C`も送りません
-- 文書全体は送信しません
-- 設定の「詳細」→「最後にAIへ送信した内容を表示」で確認できます
+- 文書全体は読み取りません
+- 設定の「詳細」→「最後にオンデバイスAIへ渡した内容を表示」で確認できます
 
-同じ内容の問い合わせは10分間メモリキャッシュから返します
+同じ内容の問い合わせは10分間メモリキャッシュから返し、再生成の計算量を減らします
 
-## AI Provider
+## オンデバイスAI
 
-- 現在のAI ProviderはOpenAI
-- モデルは`gpt-6-luna`（reasoning effort `none`）
-- Responses API（`POST /v1/responses`）+ Structured Outputsを使用
-- APIキーはmacOSキーチェーンへ保存します
-- 接続確認も`/v1/responses`への最小の問い合わせで行います
-- Providerは`LanguageAssistantProvider`で抽象化しているため、他のサービスやmyss側バックエンドへ差し替えられます
-
-必要なAPIキー権限
-
-- Restricted
-- Model capabilities: Request
-- その他: None（`List models`は不要）
+- Foundation Modelsの`SystemLanguageModel.default`だけを使用します
+- Guided Generation（`@Generable`）で`intent`、`targetExpression`、`summary`、`candidates`を構造化して受け取ります
+- 問い合わせごとに新しい`LanguageModelSession`を作り、キャンセルした生成が次の結果へ混ざらないようにしています
+- 起動時とショートカット押下時にモデルをprewarmします
+- 利用できない場合は理由（Apple Intelligenceが無効、非対応Mac、モデル準備中）を表示して停止し、クラウドAIへは切り替えません
 
 ## アプリのビルド
 
@@ -88,7 +89,7 @@ ad-hoc署名が必要な場合だけ`--adhoc`を付けます（Accessibility権�
 1. `security find-identity -v -p codesigning`でApple Development identityを確認
 2. `Scripts/build-app.sh --install --restart`
 3. システム設定の「プライバシーとセキュリティ」→「アクセシビリティ」でmyssを許可
-4. 初回起動画面でAPIキーを保存して接続確認し、「開始」を押す
+4. 初回起動画面でオンデバイスAIが「利用可能」になっていることを確認し、「開始」を押す
 
 以降はコードを修正して`Scripts/build-app.sh --install --restart`を実行するだけで確認できます
 TerminalやPythonは利用に不要です

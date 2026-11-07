@@ -25,27 +25,22 @@ enum ContextSource: String {
     case none = "手入力"
 }
 
-enum LanguageIntent: String, Codable, Hashable, Sendable, CaseIterable {
+enum LanguageIntent: String, Hashable, Sendable, CaseIterable {
     case findExpression = "find_expression"
     case explainExpression = "explain_expression"
     case rewrite
     case compareExpressions = "compare_expressions"
     case continueText = "continue_text"
     case unknown
-
-    init(from decoder: Decoder) throws {
-        let value = try decoder.singleValueContainer().decode(String.self)
-        self = LanguageIntent(rawValue: value) ?? .unknown
-    }
 }
 
-struct LanguageCandidate: Codable, Hashable, Sendable, Identifiable {
+struct LanguageCandidate: Hashable, Sendable, Identifiable {
     let text: String
     let explanation: String
     var id: String { text }
 }
 
-struct LanguageResponse: Codable, Hashable, Sendable {
+struct LanguageResponse: Hashable, Sendable {
     let intent: LanguageIntent
     /// AIが説明対象として認識した語句　なければnil
     let targetExpression: String?
@@ -59,19 +54,23 @@ struct LanguageResponse: Codable, Hashable, Sendable {
         self.candidates = candidates
     }
 
-    enum CodingKeys: String, CodingKey {
-        case intent
-        case targetExpression = "target_expression"
-        case summary
-        case candidates
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(intent, forKey: .intent)
-        try container.encode(targetExpression, forKey: .targetExpression)
-        try container.encode(summary, forKey: .summary)
-        try container.encode(candidates, forKey: .candidates)
+    /// 生成結果を表示用に整える　空白除去、空の対象語のnil化、候補の重複除去、最大10件
+    static func normalized(
+        intent: LanguageIntent, targetExpression: String?, summary: String, candidates: [LanguageCandidate]
+    ) -> LanguageResponse {
+        let target = targetExpression?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var seen = Set<String>()
+        let unique = candidates.compactMap { candidate -> LanguageCandidate? in
+            let text = candidate.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty, seen.insert(text).inserted else { return nil }
+            return LanguageCandidate(text: text, explanation: candidate.explanation.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return LanguageResponse(
+            intent: intent,
+            targetExpression: target?.isEmpty == false ? target : nil,
+            summary: summary.trimmingCharacters(in: .whitespacesAndNewlines),
+            candidates: Array(unique.prefix(10))
+        )
     }
 }
 
@@ -91,35 +90,47 @@ struct LanguageRequest: Hashable, Sendable {
 
 protocol LanguageAssistantProvider: Sendable {
     func request(_ request: LanguageRequest) async throws -> LanguageResponse
-    func verify() async throws
+}
+
+/// オンデバイスモデルの利用可否
+enum ModelAvailability: Equatable, Sendable {
+    case available
+    case appleIntelligenceNotEnabled
+    case deviceNotEligible
+    case modelNotReady
+    case unavailable
+
+    var isAvailable: Bool { self == .available }
+
+    var label: String {
+        switch self {
+        case .available: "利用可能"
+        case .appleIntelligenceNotEnabled: "Apple Intelligenceが無効です　システム設定で有効にしてください"
+        case .deviceNotEligible: "このMacはApple Intelligenceに対応していません"
+        case .modelNotReady: "オンデバイスモデルを準備中です"
+        case .unavailable: "このMacではオンデバイスAIを利用できません"
+        }
+    }
 }
 
 enum LanguageAssistantError: LocalizedError, Equatable {
-    case missingAPIKey
-    case invalidAPIKey
-    case insufficientPermission
-    case rateLimited
-    case quotaExceeded
-    case temporaryServerError
-    case keychainReadBack
+    case modelUnavailable(ModelAvailability)
+    case contextTooLarge
     case refused
-    case truncated
+    case unsupportedLanguage
+    case busy
     case invalidResponse
-    case server(String)
+    case generationFailed(String)
 
     var errorDescription: String? {
         switch self {
-        case .missingAPIKey: "APIキーが未設定です"
-        case .invalidAPIKey: "APIキーが無効です"
-        case .insufficientPermission: "APIキーの権限が不足しています"
-        case .rateLimited: "レート制限に達しています　少し待ってから再試行してください"
-        case .quotaExceeded: "利用上限に達しています"
-        case .temporaryServerError: "OpenAI APIで一時的なエラーが発生しています"
-        case .keychainReadBack: "APIキーをキーチェーンから読み戻せませんでした"
+        case let .modelUnavailable(availability): availability.label
+        case .contextTooLarge: "文章が長すぎるため処理できませんでした"
         case .refused: "この内容には回答できませんでした"
-        case .truncated: "回答が途中で終了しました"
-        case .invalidResponse: "AIサービスから不正な応答を受信しました"
-        case let .server(message): message
+        case .unsupportedLanguage: "この言語はオンデバイスAIで処理できません"
+        case .busy: "オンデバイスAIが処理中です　少し待ってから再試行してください"
+        case .invalidResponse: "オンデバイスAIから結果を取得できませんでした"
+        case let .generationFailed(message): message
         }
     }
 }

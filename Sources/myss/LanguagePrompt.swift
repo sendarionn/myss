@@ -62,71 +62,38 @@ enum LanguagePrompt {
     回答は日本語で、短く書いてください
     """
 
-    static var responseSchema: [String: Any] { [
-        "type": "object",
-        "properties": [
-            "intent": ["type": "string", "enum": LanguageIntent.allCases.map(\.rawValue)],
-            "target_expression": ["type": ["string", "null"]],
-            "summary": ["type": "string"],
-            "candidates": [
-                "type": "array",
-                "items": [
-                    "type": "object",
-                    "properties": [
-                        "text": ["type": "string"],
-                        "explanation": ["type": "string"]
-                    ],
-                    "required": ["text", "explanation"],
-                    "additionalProperties": false
-                ]
-            ]
-        ],
-        "required": ["intent", "target_expression", "summary", "candidates"],
-        "additionalProperties": false
-    ] }
-
-    /// 最初のユーザーメッセージ　文脈と最初の指示を含む
-    static func contextMessage(for request: LanguageRequest, instruction: String) -> String {
+    /// オンデバイスモデルへ渡す単一のプロンプト
+    /// 過去の指示と回答を含め、現在までに与えられた文脈全体から現在の結果を1つ生成させる
+    static func prompt(for request: LanguageRequest) -> String {
         var context = request.surroundingContext
         if let offset = request.cursorOffset {
             let nsContext = context as NSString
             let location = max(0, min(offset, nsContext.length))
             context = nsContext.replacingCharacters(in: NSRange(location: location, length: 0), with: cursorMarker)
         }
-        return """
-        <selected_text>\(request.selectedText)</selected_text>
-        <context>\(context)</context>
-        <instruction>\(instruction)</instruction>
-        """
-    }
-
-    static func followUpMessage(_ instruction: String) -> String {
-        "<instruction>\(instruction)</instruction>"
-    }
-
-    /// Messages APIへ渡す会話　過去の回答を挟んで追加指示を連ねる
-    static func messages(for request: LanguageRequest) -> [[String: String]] {
+        var sections = [
+            "<selected_text>\(request.selectedText)</selected_text>",
+            "<context>\(context)</context>"
+        ]
         let history = Array(request.history.suffix(maximumHistoryTurns))
-        let instructions = history.map(\.instruction) + [request.manualInstruction]
-        var messages = [["role": "user", "content": contextMessage(for: request, instruction: instructions[0])]]
-        for (index, turn) in history.enumerated() {
-            messages.append(["role": "assistant", "content": encode(turn.response)])
-            messages.append(["role": "user", "content": followUpMessage(instructions[index + 1])])
+        if !history.isEmpty {
+            let turns = history.map { turn in
+                "<turn>\n<instruction>\(turn.instruction)</instruction>\n<answer>\(describe(turn.response))</answer>\n</turn>"
+            }
+            sections.append("<history>\n\(turns.joined(separator: "\n"))\n</history>")
         }
-        return messages
+        sections.append("<instruction>\(request.manualInstruction)</instruction>")
+        if !history.isEmpty {
+            sections.append("historyの指示はすべて有効な文脈として引き継ぎ、最新のinstructionを加えた現在の結果を1つ返してください")
+        }
+        return sections.joined(separator: "\n")
     }
 
-    /// 設定画面の確認用に送信内容を読みやすく整形する
-    static func transcript(for request: LanguageRequest) -> String {
-        messages(for: request)
-            .map { "[\($0["role"] ?? "")]\n\($0["content"] ?? "")" }
-            .joined(separator: "\n\n")
-    }
-
-    private static func encode(_ response: LanguageResponse) -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        guard let data = try? encoder.encode(response) else { return "{}" }
-        return String(decoding: data, as: UTF8.self)
+    static func describe(_ response: LanguageResponse) -> String {
+        var parts = ["intent: \(response.intent.rawValue)"]
+        if let target = response.targetExpression { parts.append("target_expression: \(target)") }
+        if !response.summary.isEmpty { parts.append("summary: \(response.summary)") }
+        if !response.candidates.isEmpty { parts.append("candidates: \(response.candidates.map(\.text).joined(separator: "、"))") }
+        return parts.joined(separator: " / ")
     }
 }

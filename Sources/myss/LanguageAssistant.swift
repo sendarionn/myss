@@ -1,98 +1,49 @@
 import Foundation
 
-enum AIProviderKind: String, CaseIterable, Identifiable {
-    case openAI = "openai"
-    var id: Self { self }
-    var label: String { "OpenAI" }
-    var keychainAccount: String { "\(rawValue)-api-key" }
-}
-
-enum ConnectionState: Equatable {
-    case unknown
-    case checking
-    case connected
-    case failed(String)
-}
-
-/// AI Providerの設定、問い合わせ、短時間キャッシュを管理する
+/// オンデバイスモデルへの問い合わせ、利用可否、短時間キャッシュを管理する
 @MainActor
 final class LanguageAssistant: ObservableObject {
     static let shared = LanguageAssistant()
 
-    @Published private(set) var hasAPIKey = false
-    @Published private(set) var connectionState: ConnectionState = .unknown
-    @Published private(set) var lastSentTranscript: String?
+    @Published private(set) var availability: ModelAvailability
+    @Published private(set) var lastPrompt: String?
 
-    let providerKind = AIProviderKind.openAI
-    private var apiKey: String?
     private var cache = ResponseCache()
-    private let makeProvider: (String) -> any LanguageAssistantProvider
+    private let provider: any LanguageAssistantProvider
+    private let checkAvailability: () -> ModelAvailability
 
     init(
-        apiKey: String? = KeychainStore.read(account: AIProviderKind.openAI.keychainAccount),
-        makeProvider: @escaping (String) -> any LanguageAssistantProvider = { OpenAILanguageProvider(apiKey: $0) }
+        provider: any LanguageAssistantProvider = AppleLanguageProvider(),
+        checkAvailability: @escaping () -> ModelAvailability = { AppleLanguageProvider.availability }
     ) {
-        self.apiKey = apiKey
-        self.makeProvider = makeProvider
-        hasAPIKey = !(apiKey ?? "").isEmpty
+        self.provider = provider
+        self.checkAvailability = checkAvailability
+        availability = checkAvailability()
+    }
+
+    @discardableResult
+    func refreshAvailability() -> ModelAvailability {
+        availability = checkAvailability()
+        return availability
+    }
+
+    func prewarm() {
+        guard refreshAvailability().isAvailable else { return }
+        AppleLanguageProvider.prewarm()
     }
 
     func respond(to request: LanguageRequest) async throws -> LanguageResponse {
         if let cached = cache.value(for: request) { return cached }
-        guard let apiKey, !apiKey.isEmpty else { throw LanguageAssistantError.missingAPIKey }
-        lastSentTranscript = LanguagePrompt.transcript(for: request)
-        let response = try await makeProvider(apiKey).request(request)
+        guard refreshAvailability().isAvailable else { throw LanguageAssistantError.modelUnavailable(availability) }
+        lastPrompt = LanguagePrompt.prompt(for: request)
+        let response = try await provider.request(request)
         try Task.checkCancellation()
         cache.insert(response, for: request)
         return response
     }
-
-    func saveAPIKey(_ value: String) async {
-        let key = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty else { return }
-        connectionState = .unknown
-        do {
-            try KeychainStore.save(key, account: providerKind.keychainAccount)
-            // 保存できたことを読み戻して確認してから設定済みとする　キーそのものは記録しない
-            guard KeychainStore.read(account: providerKind.keychainAccount) == key else {
-                throw LanguageAssistantError.keychainReadBack
-            }
-            apiKey = key
-            hasAPIKey = true
-            cache = ResponseCache()
-        } catch {
-            apiKey = nil
-            hasAPIKey = false
-            connectionState = .failed(error.localizedDescription)
-            return
-        }
-        await verifyConnection()
-    }
-
-    func deleteAPIKey() {
-        KeychainStore.delete(account: providerKind.keychainAccount)
-        apiKey = nil
-        hasAPIKey = false
-        connectionState = .unknown
-        cache = ResponseCache()
-    }
-
-    func verifyConnection() async {
-        guard let apiKey, !apiKey.isEmpty else {
-            connectionState = .failed(LanguageAssistantError.missingAPIKey.localizedDescription)
-            return
-        }
-        connectionState = .checking
-        do {
-            try await makeProvider(apiKey).verify()
-            connectionState = .connected
-        } catch {
-            connectionState = .failed(error.localizedDescription)
-        }
-    }
 }
 
-/// 同じ問い合わせを短時間に繰り返さないためのメモリキャッシュ
+/// 同じ入力の再生成を避け、応答を速くし計算量を減らすためのメモリキャッシュ
 struct ResponseCache {
     var lifetime: TimeInterval = 600
     var capacity = 100

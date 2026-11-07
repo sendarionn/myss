@@ -29,9 +29,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             object: nil
         )
 
-        if !UserDefaults.standard.bool(forKey: FirstRunView.completedKey) || !LanguageAssistant.shared.hasAPIKey {
+        if !UserDefaults.standard.bool(forKey: FirstRunView.completedKey) {
             showFirstRunWindow()
         }
+        LanguageAssistant.shared.prewarm()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -39,7 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func menuWillOpen(_ menu: NSMenu) {
-        statusMenuItem?.title = LanguageAssistant.shared.hasAPIKey ? "AI　設定済み" : "AI　未設定"
+        statusMenuItem?.title = "オンデバイスAI　\(LanguageAssistant.shared.refreshAvailability().label)"
         openMenuItem?.title = "myssを開く（\(hotKeyConfiguration.displayName)）"
     }
 
@@ -85,7 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.delegate = self
         let openItem = menu.addItem(withTitle: "myssを開く（\(hotKeyConfiguration.displayName)）", action: #selector(openFromMenu), keyEquivalent: "")
         openMenuItem = openItem
-        let statusItem = menu.addItem(withTitle: "AI　確認中", action: nil, keyEquivalent: "")
+        let statusItem = menu.addItem(withTitle: "オンデバイスAI　確認中", action: nil, keyEquivalent: "")
         statusItem.isEnabled = false
         statusMenuItem = statusItem
         menu.addItem(.separator())
@@ -142,6 +143,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // 元アプリが前面にあるうちに選択文字列を取得してからパネルを出す　取得中の連続起動は無視する
         guard !isCapturingContext else { return }
         isCapturingContext = true
+        // 選択取得の間にモデルを準備して、最初の応答を速くする
+        LanguageAssistant.shared.prewarm()
         Task { @MainActor in
             let trusted = AXIsProcessTrusted()
             let context: CapturedContext

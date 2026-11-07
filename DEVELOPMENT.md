@@ -53,3 +53,12 @@
 - 署名後に`codesign --verify --deep --strict`が成功しなければ配置と再起動を行わない
 - designated requirementは`identifier "io.github.sendarionn.myss"`と証明書のCNで決まり、再ビルド後も変わらないことを確認した
 - 標準の確認手順は`Scripts/build-app.sh --install --restart`
+
+## 2026-11-08 Apple内蔵LLM専用化
+
+- OpenAI Responses API、APIキー、Keychain保存、接続確認を削除
+- `SystemLanguageModel.default`とGuided Generation（`GeneratedLanguageResponse`）で構造化結果を取得
+- 最低要件をmacOS 26へ変更（swift-tools-version 6.2）
+- エラーはmacOS 27の`LanguageModelError`と、macOS 26の`LanguageModelSession.GenerationError`の両方を変換
+- 実モデルの代表例は`MYSS_LIVE_MODEL=1 swift test --filter LiveOnDeviceModelTests`で確認する（出力文は固定しない）
+- 2026-11-08時点の開発Macでは`availability`が`modelNotReady`のままで、実生成は未確認

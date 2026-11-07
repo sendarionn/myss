@@ -59,7 +59,7 @@ final class SettingsModel: ObservableObject {
 }
 
 enum PrivacyNotice {
-    static let text = "myssは回答生成のため、選択文字列や周辺文章を設定されたAIサービスへ送信します\nパスワード欄は読み取りません"
+    static let text = "myssはアクセシビリティ権限で対象アプリの選択文字列や周辺文章を読み取り、Mac上のオンデバイスAIで処理します\nAI処理のために文章を外部サーバーへ送信しません\nパスワード欄は読み取りません"
 }
 
 struct SettingsView: View {
@@ -86,9 +86,8 @@ struct SettingsView: View {
                 if let error = settings.hotKeyError { Text(error).foregroundStyle(.red).font(.caption) }
             }
 
-            Section("AI") {
-                LabeledContent("Provider", value: assistant.providerKind.label)
-                APIKeyForm(assistant: assistant)
+            Section("オンデバイスAI") {
+                ModelStatusRows(assistant: assistant)
             }
 
             Section("権限") {
@@ -107,9 +106,9 @@ struct SettingsView: View {
                 LabeledContent("プライバシー") {
                     Text(PrivacyNotice.text).font(.caption).multilineTextAlignment(.trailing)
                 }
-                Button(showsTranscript ? "送信内容を隠す" : "最後にAIへ送信した内容を表示") { showsTranscript.toggle() }
-                    .disabled(assistant.lastSentTranscript == nil)
-                if showsTranscript, let transcript = assistant.lastSentTranscript {
+                Button(showsTranscript ? "処理内容を隠す" : "最後にオンデバイスAIへ渡した内容を表示") { showsTranscript.toggle() }
+                    .disabled(assistant.lastPrompt == nil)
+                if showsTranscript, let transcript = assistant.lastPrompt {
                     Text(transcript)
                         .font(.system(.caption2, design: .monospaced))
                         .textSelection(.enabled)
@@ -128,54 +127,20 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 520, height: 560)
-        .onAppear { settings.refreshPermissions() }
+        .onAppear {
+            settings.refreshPermissions()
+            assistant.refreshAvailability()
+        }
     }
 }
 
-struct APIKeyForm: View {
+struct ModelStatusRows: View {
     @ObservedObject var assistant: LanguageAssistant
-    @State private var draft = ""
 
     var body: some View {
-        LabeledContent("API Key") {
-            HStack {
-                Text(assistant.hasAPIKey ? "保存済み" : "未設定").foregroundStyle(.secondary)
-                SecureField("sk-…", text: $draft)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 200)
-                    .onSubmit(save)
-                Button("保存", action: save).disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-        }
-        LabeledContent("接続状態") {
-            HStack {
-                connectionLabel
-                if assistant.hasAPIKey {
-                    Button("接続確認") { Task { await assistant.verifyConnection() } }
-                        .disabled(assistant.connectionState == .checking)
-                    Button("削除", role: .destructive) { assistant.deleteAPIKey() }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder private var connectionLabel: some View {
-        switch assistant.connectionState {
-        case .unknown:
-            Text(assistant.hasAPIKey ? "未確認" : "未設定").foregroundStyle(.secondary)
-        case .checking:
-            ProgressView().controlSize(.small)
-        case .connected:
-            Label("接続済み", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-        case let .failed(message):
-            Label(message, systemImage: "exclamationmark.circle").foregroundStyle(.red)
-        }
-    }
-
-    private func save() {
-        let value = draft
-        draft = ""
-        Task { await assistant.saveAPIKey(value) }
+        LabeledContent("モデル", value: "Apple Foundation Model")
+        StatusRow(label: "状態", value: assistant.availability.label, success: assistant.availability.isAvailable)
+        LabeledContent("処理", value: "このMac上")
     }
 }
 

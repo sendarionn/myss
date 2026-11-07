@@ -19,9 +19,8 @@ struct FirstRunView: View {
                         Button("許可する") { settings.requestAccessibility() }
                     }
                 }
-                Section("AI") {
-                    LabeledContent("Provider", value: assistant.providerKind.label)
-                    APIKeyForm(assistant: assistant)
+                Section("オンデバイスAI") {
+                    ModelStatusRows(assistant: assistant)
                 }
                 Section {
                     LabeledContent("ショートカット", value: settings.hotKey.displayName)
@@ -38,19 +37,17 @@ struct FirstRunView: View {
                     onComplete()
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(!assistant.hasAPIKey || assistant.connectionState != .connected)
+                .disabled(!settings.accessibilityGranted || !assistant.availability.isAvailable)
             }
         }
         .padding(20)
         .frame(width: 520)
-        .onAppear {
-            settings.refreshPermissions()
-            if assistant.hasAPIKey, assistant.connectionState == .unknown {
-                Task { await assistant.verifyConnection() }
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            settings.refreshPermissions()
-        }
+        .onAppear(perform: refresh)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refresh() }
+    }
+
+    private func refresh() {
+        settings.refreshPermissions()
+        assistant.refreshAvailability()
     }
 }
