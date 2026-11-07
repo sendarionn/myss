@@ -62,6 +62,7 @@ struct SettingsView: View {
     @ObservedObject var settings: SettingsModel
     @ObservedObject private var setup = SetupManager.shared
     @ObservedObject private var backend = SemanticSearchEngine.shared
+    @State private var showsSetupDetails = false
 
     var body: some View {
         Form {
@@ -89,11 +90,20 @@ struct SettingsView: View {
                     ProgressView(value: setup.progress)
                     Text(setup.stage.rawValue).font(.caption).foregroundStyle(.secondary)
                 } else {
-                    Button(ApplicationPaths.isSearchDataReady ? "検索データを再構築" : "検索データを準備") {
-                        ApplicationPaths.isSearchDataReady ? setup.rebuild() : setup.prepare()
+                    Button(ApplicationPaths.isSearchDataReady ? "検索データを修復" : "検索データを準備") {
+                        ApplicationPaths.isSearchDataReady ? setup.repairIndex() : setup.prepare()
                     }
                 }
-                if let error = setup.errorMessage { Text(error).foregroundStyle(.red).font(.caption) }
+                if let error = setup.errorMessage {
+                    Text(error).foregroundStyle(.red).font(.caption)
+                    HStack {
+                        Button("再試行") { setup.retry() }
+                        Button(showsSetupDetails ? "詳細を隠す" : "詳細を表示") { showsSetupDetails.toggle() }
+                    }
+                }
+                if showsSetupDetails, let details = setup.errorDetails {
+                    Text(details).font(.system(.caption2, design: .monospaced)).textSelection(.enabled)
+                }
             }
 
             Section("権限") {

@@ -112,6 +112,10 @@ final class SemanticSearchEngine: ObservableObject {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: pythonPath)
         process.arguments = [backendPath, "serve", "--data", dataPath, "--port", "52791"]
+        var processEnvironment = ProcessInfo.processInfo.environment
+        processEnvironment["HF_HOME"] = ApplicationPaths.modelDirectory.path
+        processEnvironment["PYTHONUNBUFFERED"] = "1"
+        process.environment = processEnvironment
         process.standardOutput = FileHandle.standardOutput
         process.standardError = FileHandle.standardError
         try process.run()

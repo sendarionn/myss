@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import argparse
+from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 import tarfile
@@ -98,10 +100,39 @@ def build_index(xml_path: Path, output_path: Path, batch_size: int):
     (output_path / "senses.json").write_text(
         json.dumps(records, ensure_ascii=False, separators=(",", ":")), encoding="utf-8"
     )
-    (output_path / "metadata.json").write_text(
-        json.dumps({"model": MODEL_ID, "senseCount": len(records), "wordnetVersion": "2.1"}), encoding="utf-8"
-    )
+    finalize_metadata(output_path, len(records), embeddings.shape[1])
     print(f"myss backend: indexed {len(records)} lexical senses", flush=True)
+
+
+def finalize_metadata(output_path: Path, sense_count=None, dimensions=384):
+    senses_path = output_path / "senses.json"
+    embeddings_path = output_path / "embeddings.npy"
+    digest = hashlib.sha256()
+    for path in (senses_path, embeddings_path):
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    if sense_count is None:
+        sense_count = len(json.loads(senses_path.read_text(encoding="utf-8")))
+    metadata = {
+        "indexVersion": "1",
+        "wordnetVersion": "2.1",
+        "model": MODEL_ID,
+        "embeddingDimensions": dimensions,
+        "senseCount": sense_count,
+        "sha256": digest.hexdigest(),
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    }
+    (output_path / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=False), encoding="utf-8")
+
+
+def prepare_model():
+    from sentence_transformers import SentenceTransformer
+    model = SentenceTransformer(MODEL_ID, device="cpu")
+    vector = model.encode(["検索クエリ: 動作確認"], normalize_embeddings=True)
+    if vector.shape != (1, 384):
+        raise RuntimeError(f"unexpected Ruri embedding shape: {vector.shape}")
+    print(json.dumps({"model": MODEL_ID, "dimensions": 384}), flush=True)
 
 
 def setup(data_path: Path, downloads_path: Path, batch_size: int):
@@ -233,6 +264,9 @@ def main():
     setup_parser.add_argument("--data", required=True, type=Path)
     setup_parser.add_argument("--downloads", required=True, type=Path)
     setup_parser.add_argument("--batch-size", type=int, default=64)
+    subparsers.add_parser("prepare-model")
+    finalize_parser = subparsers.add_parser("finalize-metadata")
+    finalize_parser.add_argument("--data", required=True, type=Path)
     parse = subparsers.add_parser("parse")
     parse.add_argument("--xml", required=True, type=Path)
     serve_parser = subparsers.add_parser("serve")
@@ -243,6 +277,10 @@ def main():
         build_index(args.xml, args.output, args.batch_size)
     elif args.command == "setup":
         setup(args.data, args.downloads, args.batch_size)
+    elif args.command == "prepare-model":
+        prepare_model()
+    elif args.command == "finalize-metadata":
+        finalize_metadata(args.data)
     elif args.command == "parse":
         records = parse_wordnet(args.xml)
         print(json.dumps({"senseCount": len(records), "sample": records[:2]}, ensure_ascii=False))

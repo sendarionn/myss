@@ -4,6 +4,7 @@ struct FirstRunView: View {
     @ObservedObject var settings: SettingsModel
     @ObservedObject private var setup = SetupManager.shared
     let onComplete: () -> Void
+    @State private var showsDetails = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -24,15 +25,23 @@ struct FirstRunView: View {
 
             GroupBox("検索データ") {
                 VStack(alignment: .leading, spacing: 10) {
-                    if setup.isRunning {
-                        ProgressView(value: setup.progress)
-                        Text(setup.stage.rawValue).foregroundStyle(.secondary)
-                    } else if setup.stage == .ready {
-                        Label("準備済み", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-                    } else {
+                    ForEach(SetupStep.allCases) { step in
+                        SetupStepRow(label: step.rawValue, state: setup.stepStates[step] ?? .pending)
+                    }
+                    if setup.isRunning { ProgressView(value: setup.progress) }
+                    if let error = setup.errorMessage {
+                        Text(error).foregroundStyle(.red)
+                        HStack {
+                            Button("再試行") { setup.retry() }
+                            Button(showsDetails ? "詳細を隠す" : "詳細を表示") { showsDetails.toggle() }
+                        }
+                    } else if setup.stage != .ready, !setup.isRunning {
                         Button("検索データを準備") { setup.prepare() }
                     }
-                    if let error = setup.errorMessage { Text(error).foregroundStyle(.red).font(.caption) }
+                    if showsDetails, let details = setup.errorDetails {
+                        ScrollView { Text(details).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
+                            .frame(maxHeight: 120)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(4)
@@ -49,5 +58,24 @@ struct FirstRunView: View {
         .padding(24)
         .frame(width: 500)
         .onAppear { settings.refreshPermissions() }
+    }
+}
+
+struct SetupStepRow: View {
+    let label: String
+    let state: SetupStepState
+
+    var body: some View {
+        Label(label, systemImage: symbol)
+            .foregroundStyle(state == .failed ? .red : state == .complete ? .green : .primary)
+    }
+
+    private var symbol: String {
+        switch state {
+        case .pending: "circle"
+        case .running: "circle.fill"
+        case .complete: "checkmark.circle.fill"
+        case .failed: "xmark.circle.fill"
+        }
     }
 }

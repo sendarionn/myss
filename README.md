@@ -34,6 +34,8 @@ Scripts/build-app.sh --install
 
 `~/Applications/myss.app`へ配置され、以降はFinderから起動できます
 
+ビルド時に開発環境のindexを事前生成済み成果物としてアプリへ同梱します
+
 初回起動後はアプリ内の案内から検索データとアクセシビリティ権限を準備します
 Terminalでのセットアップは不要です
 
@@ -45,7 +47,14 @@ Terminalでのセットアップは不要です
 Scripts/setup-semantic-search.sh
 ```
 
-通常のアプリではPython実行環境、WordNet、モデル、indexを`~/Library/Application Support/myss`へ保存します
+開発者向け処理ではWordNet取得、57,885語義のEmbedding生成、index生成を行います
+
+通常のアプリでは事前生成済みindexを検証して`~/Library/Application Support/myss/Data`へ配置します
+通常利用時に57,885語義のEmbeddingは生成しません
+RuriモデルとPython runtimeは同じApplication Support以下へ準備します
+
+セットアップの詳細ログは`~/Library/Logs/myss/setup.log`へ保存します
+失敗時はアプリ内の「詳細を表示」で失敗段階、実行コマンド、終了コード、stderr末尾を確認できます
 
 ## 開発用実行
 
@@ -72,7 +81,8 @@ swift test
 ## 現時点の制約
 
 - Wiktionary、Wikipedia、Wikidata、macOS Dictionary連携は未実装
-- Ruriの初回セットアップにはモデル取得とindex生成の時間が必要
+- Ruriの初回セットアップにはモデル取得とPythonパッケージ準備の時間が必要
+- 現在のruntime作成には明示検出したPython 3.10以降を使用するため、Python非依存化は未完了
 - Accessibility APIで選択範囲への直接挿入ができないアプリでは、クリップボードとペースト操作へフォールバック
 - アプリ署名と配布用バンドルは未整備
 - グローバルショートカットの初期値は`⌃⌥⌘K`
