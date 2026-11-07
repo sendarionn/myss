@@ -67,3 +67,19 @@ enum SemanticBackendError: LocalizedError {
         }
     }
 }
+
+enum BackendLifecycleState: Equatable {
+    case notConfigured
+    case starting
+    case ready
+    case error(String)
+
+    var label: String {
+        switch self {
+        case .notConfigured: "検索データ未準備"
+        case .starting: "準備中"
+        case .ready: "起動中"
+        case .error: "エラー"
+        }
+    }
+}

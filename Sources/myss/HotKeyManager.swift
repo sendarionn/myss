@@ -10,6 +10,23 @@ struct HotKeyConfiguration: Equatable, Sendable {
         modifiers: UInt32(controlKey | optionKey | cmdKey),
         displayName: "⌃⌥⌘K"
     )
+
+    static var saved: HotKeyConfiguration {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: "hotKey.keyCode") != nil else { return .default }
+        return HotKeyConfiguration(
+            keyCode: UInt32(defaults.integer(forKey: "hotKey.keyCode")),
+            modifiers: UInt32(defaults.integer(forKey: "hotKey.modifiers")),
+            displayName: defaults.string(forKey: "hotKey.displayName") ?? Self.default.displayName
+        )
+    }
+
+    func save() {
+        let defaults = UserDefaults.standard
+        defaults.set(Int(keyCode), forKey: "hotKey.keyCode")
+        defaults.set(Int(modifiers), forKey: "hotKey.modifiers")
+        defaults.set(displayName, forKey: "hotKey.displayName")
+    }
 }
 
 enum HotKeyRegistrationError: Error, Equatable {

@@ -51,6 +51,9 @@ struct SearchPanelView: View {
         if let message = model.statusMessage {
             ContentUnavailableView("検索できません", systemImage: "exclamationmark.magnifyingglass", description: Text(message))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if model.isSearching && model.results.isEmpty {
+            ContentUnavailableView("myssを準備しています", systemImage: "hourglass")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if model.results.isEmpty {
             ContentUnavailableView("語または意味を入力", systemImage: "text.magnifyingglass")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

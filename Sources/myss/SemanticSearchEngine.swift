@@ -1,11 +1,13 @@
 import Foundation
+import Combine
 
 @MainActor
-final class SemanticSearchEngine {
+final class SemanticSearchEngine: ObservableObject {
     static let shared = SemanticSearchEngine()
+    @Published private(set) var lifecycleState: BackendLifecycleState = ApplicationPaths.isSearchDataReady ? .starting : .notConfigured
     private let baseURL = URL(string: "http://127.0.0.1:52791")!
     private var backendProcess: Process?
-    private var didAttemptStart = false
+    private var startupTask: Task<Void, Error>?
 
     func direction(for text: String) -> SearchDirection {
         let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -51,29 +53,61 @@ final class SemanticSearchEngine {
         return try JSONDecoder().decode(SearchResponse.self, from: data)
     }
 
+    func prewarm() async {
+        guard ApplicationPaths.isSearchDataReady else {
+            lifecycleState = .notConfigured
+            return
+        }
+        do { try await ensureStarted() }
+        catch { lifecycleState = .error(error.localizedDescription) }
+    }
+
     func stop() {
         guard let backendProcess else { return }
         if backendProcess.isRunning { backendProcess.terminate() }
         self.backendProcess = nil
-        didAttemptStart = false
+        startupTask?.cancel()
+        startupTask = nil
+        lifecycleState = ApplicationPaths.isSearchDataReady ? .starting : .notConfigured
     }
 
     private func ensureStarted() async throws {
-        if await isHealthy() { return }
-        guard !didAttemptStart else {
-            throw SemanticBackendError.unavailable("検索データが未準備です　Scripts/setup-semantic-search.shを実行してください")
+        if await isHealthy() {
+            lifecycleState = .ready
+            return
         }
-        didAttemptStart = true
+        if let startupTask {
+            try await startupTask.value
+            return
+        }
+        guard ApplicationPaths.isSearchDataReady else {
+            lifecycleState = .notConfigured
+            throw SemanticBackendError.unavailable("検索データが未準備です　設定から検索データを準備してください")
+        }
+        lifecycleState = .starting
+        let task = Task { try await startBackend() }
+        startupTask = task
+        do {
+            try await task.value
+            startupTask = nil
+            lifecycleState = .ready
+        } catch {
+            startupTask = nil
+            lifecycleState = .error(error.localizedDescription)
+            throw error
+        }
+    }
+
+    private func startBackend() async throws {
         let environment = ProcessInfo.processInfo.environment
-        let projectRoot = environment["MYSS_PROJECT_ROOT"] ?? FileManager.default.currentDirectoryPath
-        let pythonPath = environment["MYSS_BACKEND_PYTHON"] ?? "\(projectRoot)/.myss-runtime/bin/python3"
-        let dataPath = environment["MYSS_DATA_PATH"] ?? "\(projectRoot)/.myss-data"
+        let pythonPath = environment["MYSS_BACKEND_PYTHON"] ?? ApplicationPaths.pythonExecutable.path
+        let dataPath = environment["MYSS_DATA_PATH"] ?? ApplicationPaths.dataDirectory.path
         let bundledBackend = Bundle.module.url(forResource: "Backend", withExtension: nil)?
             .appending(path: "semantic_backend.py").path
-        let backendPath = bundledBackend ?? "\(projectRoot)/Sources/myss/Backend/semantic_backend.py"
+        let backendPath = bundledBackend ?? ""
         guard FileManager.default.isExecutableFile(atPath: pythonPath),
               FileManager.default.fileExists(atPath: "\(dataPath)/embeddings.npy") else {
-            throw SemanticBackendError.unavailable("検索データが未準備です　Scripts/setup-semantic-search.shを実行してください")
+            throw SemanticBackendError.unavailable("検索データが未準備です　設定から検索データを準備してください")
         }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: pythonPath)

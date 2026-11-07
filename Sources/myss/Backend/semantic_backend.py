@@ -2,11 +2,14 @@
 import argparse
 import json
 from pathlib import Path
+import tarfile
+import urllib.request
 import xml.etree.ElementTree as ET
 
 WORDNET_URL = "https://bond-lab.github.io/wnja/"
 WORDNET_ATTRIBUTION = "日本語ワードネット 2.1"
 MODEL_ID = "cl-nagoya/ruri-v3-70m"
+WORDNET_ARCHIVE_URL = "https://github.com/bond-lab/wnja/releases/download/v2.1/wnja-2.1.tar.xz"
 
 
 def parse_wordnet(xml_path: Path):
@@ -99,6 +102,23 @@ def build_index(xml_path: Path, output_path: Path, batch_size: int):
         json.dumps({"model": MODEL_ID, "senseCount": len(records), "wordnetVersion": "2.1"}), encoding="utf-8"
     )
     print(f"myss backend: indexed {len(records)} lexical senses", flush=True)
+
+
+def setup(data_path: Path, downloads_path: Path, batch_size: int):
+    downloads_path.mkdir(parents=True, exist_ok=True)
+    archive_path = downloads_path / "wnja-2.1.tar.xz"
+    xml_path = downloads_path / "wnja" / "wnja-2.1.xml"
+    if not xml_path.exists():
+        if not archive_path.exists():
+            urllib.request.urlretrieve(WORDNET_ARCHIVE_URL, archive_path)
+        with tarfile.open(archive_path, "r:xz") as archive:
+            target = downloads_path.resolve()
+            for member in archive.getmembers():
+                destination = (downloads_path / member.name).resolve()
+                if target not in destination.parents and destination != target:
+                    raise ValueError("invalid WordNet archive path")
+            archive.extractall(downloads_path)
+    build_index(xml_path, data_path, batch_size)
 
 
 class SearchRuntime:
@@ -209,6 +229,10 @@ def main():
     build.add_argument("--xml", required=True, type=Path)
     build.add_argument("--output", required=True, type=Path)
     build.add_argument("--batch-size", type=int, default=64)
+    setup_parser = subparsers.add_parser("setup")
+    setup_parser.add_argument("--data", required=True, type=Path)
+    setup_parser.add_argument("--downloads", required=True, type=Path)
+    setup_parser.add_argument("--batch-size", type=int, default=64)
     parse = subparsers.add_parser("parse")
     parse.add_argument("--xml", required=True, type=Path)
     serve_parser = subparsers.add_parser("serve")
@@ -217,6 +241,8 @@ def main():
     args = parser.parse_args()
     if args.command == "build":
         build_index(args.xml, args.output, args.batch_size)
+    elif args.command == "setup":
+        setup(args.data, args.downloads, args.batch_size)
     elif args.command == "parse":
         records = parse_wordnet(args.xml)
         print(json.dumps({"senseCount": len(records), "sample": records[:2]}, ensure_ascii=False))

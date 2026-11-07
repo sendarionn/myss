@@ -4,3 +4,6 @@ DerivedData/
 .DS_Store
 .myss-runtime/
 .myss-data/
+dist/
+__pycache__/
+*.pyc

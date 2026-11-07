@@ -18,17 +18,36 @@ Codexを使用して開発しています
 - `⌘Enter`でクリップボードへコピー
 - `Esc`で閉じる
 
-## 初回セットアップ
+## アプリのビルド
 
-Ruri v3 70mと日本語WordNet 2.1からローカル検索indexを作成します
+```sh
+Scripts/build-app.sh
+```
+
+`dist/myss.app`が生成されます
+
+開発中のMacへインストールする場合は以下を実行します
+
+```sh
+Scripts/build-app.sh --install
+```
+
+`~/Applications/myss.app`へ配置され、以降はFinderから起動できます
+
+初回起動後はアプリ内の案内から検索データとアクセシビリティ権限を準備します
+Terminalでのセットアップは不要です
+
+## 開発用セットアップ
+
+`swift run myss`で開発する場合だけ使用します
 
 ```sh
 Scripts/setup-semantic-search.sh
 ```
 
-モデルとPython実行環境は`.myss-runtime`、検索indexは`.myss-data`へ保存されます
+通常のアプリではPython実行環境、WordNet、モデル、indexを`~/Library/Application Support/myss`へ保存します
 
-## 実行
+## 開発用実行
 
 ```sh
 swift run myss
